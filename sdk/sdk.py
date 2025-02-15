@@ -1,19 +1,21 @@
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
 import logging
-from private import memory, spclient
+from private.memory.memory import Size
 from private.pb import nodeapi_pb2_grpc, ipcnodeapi_pb2_grpc
 from private.ipc.client import Client
+from private.spclient.spclient import SPClient
 from private.encryption import derive_key
 from typing import List, Optional
 
-BLOCK_SIZE = 1 * memory.MB
+BLOCK_SIZE = 1 * Size.MB
 ENCRYPTION_OVERHEAD = 28  # 16 bytes for AES-GCM tag, 12 bytes for nonce
 MIN_BUCKET_NAME_LENGTH = 3
 MIN_FILE_SIZE = 127  # 127 bytes
 
 from .sdk_ipc import IPC
 from .sdk_streaming import StreamingAPI
+from .erasure_code import ErasureCode
 
 class SDKError(Exception):
     pass
@@ -36,8 +38,8 @@ class SDK:
         self.streaming_max_blocks_in_chunk = streaming_max_blocks_in_chunk
         self.parity_blocks_count = parity_blocks_count
 
-        if self.block_part_size <= 0 or self.block_part_size > memory.BLOCK_SIZE_LIMIT:
-            raise SDKError(f"Invalid blockPartSize: {block_part_size}. Valid range is 1-{memory.BLOCK_SIZE_LIMIT}")
+        if self.block_part_size <= 0 or self.block_part_size > BLOCK_SIZE:
+            raise SDKError(f"Invalid blockPartSize: {block_part_size}. Valid range is 1-{BLOCK_SIZE}")
 
         # gRPC client connection
         self.conn = grpc.insecure_channel(address)
@@ -51,9 +53,9 @@ class SDK:
             raise SDKError(f"Parity blocks count {self.parity_blocks_count} should be <= {self.streaming_max_blocks_in_chunk // 2}")
 
         if self.parity_blocks_count > 0:
-            self.streaming_erasure_code = self.new_erasure_code(self.streaming_max_blocks_in_chunk - self.parity_blocks_count, self.parity_blocks_count)
+            self.streaming_erasure_code = ErasureCode(self.streaming_max_blocks_in_chunk - self.parity_blocks_count, self.parity_blocks_count)
 
-        self.sp_client = spclient.SPClient()
+        self.sp_client = SPClient()
 
     def close(self):
         if self.conn:
@@ -92,10 +94,6 @@ class SDK:
        except SDKError as err:
               logging.error(f"Error deleting bucket: {err}")
               return False
-
-    def new_erasure_code(self, data_blocks: int, parity_blocks: int):
-        # Placeholder for erasure coding logic
-        pass
 
 
 class BucketCreateResult:
