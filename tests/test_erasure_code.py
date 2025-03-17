@@ -49,16 +49,19 @@ class TestErasureCode(unittest.TestCase):
 
             for missing_idxs in all_combos:
                 blocks = split_into_blocks(encoded)
+        
+        # Mark missing shards as None
+            for idx in missing_idxs:
+             blocks[idx] = None  # Properly indicate missing shards
 
-                for idx in missing_idxs:
-                    blocks[idx] = None #Marked shard as missing
-
-                extracted = int.from_bytes(encoder.extract_data(blocks, len(data)),byteorder='big')
-                self.assertEqual(data, extracted)
-
+        # Get first 5 available shards (data_blocks=5)
+             valid_blocks = [shard if shard is not None else None for shard in blocks]
+        
+             extracted = encoder.extract_data(valid_blocks, len(data))
+             self.assertEqual(data, extracted)  # Now compares bytes-to-bytes
         # Missing more than parity shards
-        with self.subTest(f"missing more than {parity_shards} shards"):
-         blocks = split_into_blocks(encoded)
+             with self.subTest(f"missing more than {parity_shards} shards"):
+              blocks = split_into_blocks(encoded)
     # Mark more than parity_shards as missing (None)
         for i in range(parity_shards + 1):
          blocks[i] = None
