@@ -1,7 +1,7 @@
 # Core dependencies
-grpcio==1.64.0
+grpcio>=1.60.0
 grpcio-tools==1.41.1
-protobuf>=3.20.3,<4.0
+protobuf>=4.25.1
 uuid==1.30
 
 # IPFS & MerkleDAG
@@ -44,3 +44,7 @@ cryptography==36.0.0
 #erasure
 reedsolo
 numpy
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-mock>=3.12.0
