@@ -7,7 +7,7 @@ import concurrent.futures
 from hashlib import sha256
 from typing import List, Optional, Callable, Dict, Any, Union, Tuple
 
-from .sdk import MIN_BUCKET_NAME_LENGTH, SDKError, BLOCK_SIZE, ENCRYPTION_OVERHEAD
+from .common import MIN_BUCKET_NAME_LENGTH, SDKError, BLOCK_SIZE, ENCRYPTION_OVERHEAD
 from .erasure_code import ErasureCode
 from .dag import build_dag, extract_block_data
 from .connection import ConnectionPool
@@ -17,7 +17,7 @@ from .model import (
     FileBlockDownload, Chunk, IPCFileDownload, FileChunkDownload
 )
 from private.encryption import encrypt, derive_key, decrypt
-from private.pb import nodeapi_pb2_grpc, ipcnodeapi_pb2_grpc
+from private.pb import ipcnodeapi_pb2_grpc, ipcnodeapi_pb2
 
 try:
     from multiformats import cid as cidlib

@@ -10,12 +10,13 @@ setup(
     name="akavesdk",
     version="0.1.0",
     author="David",
-    author_email="david@akave.io",
+    author_email="a_pandey1@ce.iitr.ac.in",
     description="Akave SDK for Python",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/d4v1d03/akavesdk-py",
-    packages=find_packages(),
+    url="https://github.com/akave-ai/akavesdk-py",
+    packages=find_packages() + [''],  # Include the root directory as a package
+    package_dir={"akavesdk": ""},  # Map akavesdk to the root directory
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

@@ -4,7 +4,7 @@ from typing import List, Tuple, Dict, Optional, Any, BinaryIO
 from dataclasses import dataclass
 from ipld_dag_pb import PBNode, PBLink, encode, decode, code
 from multiformats import multihash, CID
-from ..private.encryption.encryption import encrypt, decrypt
+from private.encryption.encryption import encrypt, decrypt
 
 from .model import FileBlockUpload
 
