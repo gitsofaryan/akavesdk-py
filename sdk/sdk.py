@@ -18,9 +18,12 @@ import time
 class SDK:
     def __init__(self, address: str, max_concurrency: int, block_part_size: int, use_connection_pool: bool,
                  encryption_key: Optional[bytes] = None, private_key: Optional[str] = None,
-                 streaming_max_blocks_in_chunk: int = 32, parity_blocks_count: int = 0):
+                 streaming_max_blocks_in_chunk: int = 32, parity_blocks_count: int = 0,
+                 ipc_address: Optional[str] = None):
         self.client = None
         self.conn = None
+        self.ipc_conn = None
+        self.ipc_client = None
         self.sp_client = None
         self.streaming_erasure_code = None
         self.max_concurrency = max_concurrency
@@ -30,14 +33,24 @@ class SDK:
         self.encryption_key = encryption_key or []
         self.streaming_max_blocks_in_chunk = streaming_max_blocks_in_chunk
         self.parity_blocks_count = parity_blocks_count
+        self.ipc_address = ipc_address or address  # Use provided IPC address or fallback to main address
 
         if self.block_part_size <= 0 or self.block_part_size > BLOCK_SIZE:
             raise SDKError(f"Invalid blockPartSize: {block_part_size}. Valid range is 1-{BLOCK_SIZE}")
 
-        # Create gRPC channel and clients
+        # Create gRPC channel and clients for SDK operations
         self.conn = grpc.insecure_channel(address)
         self.client = nodeapi_pb2_grpc.NodeAPIStub(self.conn)
-        self.ipc_client = ipcnodeapi_pb2_grpc.IPCNodeAPIStub(self.conn)
+        
+        # Create separate gRPC channel for IPC operations if needed
+        if self.ipc_address == address:
+            # Reuse main connection for IPC
+            self.ipc_conn = self.conn
+        else:
+            # Create separate connection for IPC
+            self.ipc_conn = grpc.insecure_channel(self.ipc_address)
+        
+        self.ipc_client = ipcnodeapi_pb2_grpc.IPCNodeAPIStub(self.ipc_conn)
 
         if len(self.encryption_key) != 0 and len(self.encryption_key) != 32:
             raise SDKError("Encryption key length should be 32 bytes long")
@@ -51,9 +64,11 @@ class SDK:
         self.sp_client = SPClient()
 
     def close(self):
-        """Close the gRPC channel."""
+        """Close the gRPC channels."""
         if self.conn:
             self.conn.close()
+        if self.ipc_conn and self.ipc_conn != self.conn:
+            self.ipc_conn.close()
 
     def streaming_api(self):
         """Returns SDK streaming API."""
@@ -81,13 +96,12 @@ class SDK:
                 # Use default values if connection params call fails
                 conn_params = type('ConnectionParams', (), {
                     'dial_uri': os.getenv('ETHEREUM_NODE_URL', 'https://n1-us.akave.ai/ext/bc/2JMWNmZbYvWcJRPPy1siaDBZaDGTDAaqXoY5UBKh4YrhNFzEce/rpc'),
-                    'contract_address': os.getenv('STORAGE_CONTRACT_ADDRESS', '')
+                    'contract_address': os.getenv('STORAGE_CONTRACT_ADDRESS', '0x59E4452746858657a91cB8335BD1c13CBa3aD505')
                 })
             
             if not self.private_key:
                 raise SDKError("Private key is required for IPC operations")
             
-            # Prepare IPC client configuration
             config = Config(
                 dial_uri=conn_params.dial_uri,
                 private_key=self.private_key,
@@ -118,7 +132,7 @@ class SDK:
             
             return IPC(
                 client=self.ipc_client,
-                conn=self.conn,
+                conn=self.ipc_conn,  # Use the IPC connection
                 ipc_instance=ipc_instance,
                 max_concurrency=self.max_concurrency,
                 block_part_size=self.block_part_size,

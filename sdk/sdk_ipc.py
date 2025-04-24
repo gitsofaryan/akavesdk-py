@@ -105,17 +105,10 @@ class IPC:
             raise SDKError("invalid bucket name")
 
         try:
-            # Create the bucket in the smart contract
-            self.ipc.storage.create_bucket(name, self.ipc.auth.address, self.ipc.auth.key)
+            request = ipcnodeapi_pb2.IPCBucketCreateRequest(name=name)
+            response = self.client.BucketCreate(request)
+            return IPCBucketCreateResult(name=response.name, created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at)
             
-            # Get bucket info to return
-            bucket_info = self.ipc.storage.get_bucket(name)
-            bucket_name, created_at, owner = bucket_info
-            
-            return IPCBucketCreateResult(
-                name=bucket_name,
-                created_at=datetime.fromtimestamp(created_at)
-            )
         except Exception as e:
             raise SDKError(f"bucket creation failed: {str(e)}")
 
@@ -124,48 +117,59 @@ class IPC:
             raise SDKError("empty bucket name")
 
         try:
-            # Get bucket info from the smart contract
-            bucket_info = self.ipc.storage.get_bucket(bucket_name)
-            bucket_name, created_at, owner = bucket_info
+            request = ipcnodeapi_pb2.IPCBucketViewRequest(bucket_name=bucket_name)
+            response = self.client.BucketView(request)
             
             return IPCBucket(
-                id="",  # ID is not used in the new implementation
-                name=bucket_name,
-                created_at=datetime.fromtimestamp(created_at)
+                id=response.id,
+                name=response.name,
+                created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at
             )
         except Exception as err:
             raise SDKError(f"failed to view bucket: {str(err)}")
 
     def list_buckets(self, ctx) -> list[IPCBucket]:
         try:
-            # This is a view function, so we can use the address directly
+            request = ipcnodeapi_pb2.IPCBucketListRequest(address=self.ipc.auth.from_address)
+            response = self.client.BucketList(request)
+            
             buckets = []
-            # TODO: Implement bucket listing once the contract method is available
-            # For now, return an empty list as it's not critical for basic operations
+            for bucket in response.buckets:
+                buckets.append(IPCBucket(
+                    id=bucket.id,
+                    name=bucket.name,
+                    created_at=bucket.created_at.AsTime() if hasattr(bucket.created_at, 'AsTime') else bucket.created_at
+                ))
             return buckets
         except Exception as err:
             raise SDKError(f"failed to list buckets: {str(err)}")
 
     def delete_bucket(self, ctx, name: str) -> None:
         try:
-            # Delete bucket using the smart contract
-            self.ipc.storage.delete_bucket(name, self.ipc.auth.address, self.ipc.auth.key)
+            request = ipcnodeapi_pb2.IPCBucketDeleteRequest(
+                bucket_name=name,
+                address=self.ipc.auth.from_address
+            )
+            self.client.BucketDelete(request)
             return None
         except Exception as err:
             raise SDKError(f"failed to delete bucket: {str(err)}")
 
     def file_info(self, ctx, bucket_name: str, file_name: str) -> IPCFileMeta:
         try:
-            # Get file info from the smart contract
-            file_info = self.ipc.storage.get_file(bucket_name, file_name)
-            name, file_id, size, created_at = file_info
+            request = ipcnodeapi_pb2.IPCFileViewRequest(
+                bucket_name=bucket_name,
+                file_name=file_name,
+                address=self.ipc.auth.from_address
+            )
+            response = self.client.FileView(request)
             
             return IPCFileMeta(
-                root_cid="",  # CID is not used in the new implementation
-                name=name,
+                root_cid=response.root_cid,
+                name=response.name,
                 bucket_name=bucket_name,
-                encoded_size=size,
-                created_at=datetime.fromtimestamp(created_at)
+                encoded_size=response.encoded_size,
+                created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at
             )
         except Exception as err:
             raise SDKError(f"failed to get file info: {str(err)}")
@@ -180,10 +184,10 @@ class IPC:
                 address=self.ipc.auth.from_address
             )
             
-            resp = self.client.file_list(ctx, request)
+            response = self.client.FileList(request)
 
             files = []
-            for file_meta in resp.list:
+            for file_meta in response.files:
                 files.append(IPCFileListItem(
                     root_cid=file_meta.root_cid,
                     name=file_meta.name,
@@ -200,8 +204,13 @@ class IPC:
             raise SDKError(f"empty bucket or file name. Bucket: '{bucket_name}', File: '{file_name}'")
 
         try:
-            # Delete file using the smart contract
-            self.ipc.storage.delete_file(bucket_name, file_name, self.ipc.auth.address, self.ipc.auth.key)
+            request = ipcnodeapi_pb2.IPCFileDeleteRequest(
+                bucket_name=bucket_name,
+                file_name=file_name,
+                address=self.ipc.auth.from_address
+            )
+            
+            self.client.FileDelete(request)
             return None
         except Exception as err:
             raise SDKError(f"failed to delete file: {str(err)}")
@@ -508,7 +517,7 @@ class IPC:
                     cid=chunk.cid,
                     encoded_size=chunk.encoded_size,
                     size=chunk.size,
-                    index=len(chunks)  # Use the list index since chunk index isn't in response
+                    index=chunk.index
                 ))
             
             return IPCFileDownload(
