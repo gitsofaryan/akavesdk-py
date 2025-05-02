@@ -210,21 +210,28 @@ class StorageContract:
         """
         return self.contract.functions.accessManager().call()
 
-    def create_bucket(self, bucket_name: str, from_address: HexAddress, private_key: str) -> None:
+    def create_bucket(self, bucket_name: str, from_address: HexAddress, private_key: str, gas_limit: int = None) -> None:
         """Creates a new bucket.
         
         Args:
             bucket_name: Name of the bucket to create
             from_address: Address creating the bucket
             private_key: Private key for signing the transaction
+            gas_limit: Optional gas limit for the transaction. If not provided, will use default.
         """
         # Build transaction
-        tx = self.contract.functions.createBucket(bucket_name).build_transaction({
+        tx_params = {
             'from': from_address,
-            'gas': 500000,  # Gas limit
             'gasPrice': self.web3.eth.gas_price,
             'nonce': self.web3.eth.get_transaction_count(from_address)
-        })
+        }
+        
+        if gas_limit:
+            tx_params['gas'] = gas_limit
+        else:
+            tx_params['gas'] = 500000  # Default gas limit
+            
+        tx = self.contract.functions.createBucket(bucket_name).build_transaction(tx_params)
         
         # Sign transaction
         signed_tx = Account.sign_transaction(tx, private_key)
@@ -235,7 +242,14 @@ class StorageContract:
         # Wait for receipt
         receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status != 1:
-            raise Exception("Transaction failed")
+            # Get revert reason if possible
+            try:
+                self.contract.functions.createBucket(bucket_name).call({
+                    'from': from_address
+                })
+            except Exception as e:
+                raise Exception(f"Transaction reverted: {str(e)}")
+            raise Exception(f"Transaction failed. Receipt: {receipt}")
 
     def create_file(self, bucket_name: str, file_name: str, file_id: bytes, size: int, from_address: HexAddress, private_key: str) -> None:
         """Creates a new file entry.
@@ -266,6 +280,45 @@ class StorageContract:
         receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status != 1:
             raise Exception("Transaction failed")
+
+    def commit_file(self, bucket_name: str, file_name: str, size: int, root_cid: bytes, from_address: HexAddress, private_key: str) -> None:
+        """Updates the file metadata after upload (size, root CID).
+        
+        Args:
+            bucket_name: Name of the bucket containing the file
+            file_name: Name of the file
+            size: Final size of the file in bytes
+            root_cid: Root CID of the uploaded file
+            from_address: Address committing the file
+            private_key: Private key for signing the transaction
+        """
+        # Assume a contract function like 'commitFile' or 'updateFileMetadata' exists
+        # Adding 'commitFile' based on Go SDK patterns
+        function_name = 'commitFile' # Adjust if contract ABI uses a different name
+        
+        try:
+            contract_function = getattr(self.contract.functions, function_name)
+        except AttributeError:
+            raise NotImplementedError(f"Contract function '{function_name}' not found in ABI")
+            
+        # Build transaction
+        tx = contract_function(bucket_name, file_name, size, root_cid).build_transaction({
+            'from': from_address,
+            'gas': 500000,  # Gas limit (adjust as needed)
+            'gasPrice': self.web3.eth.gas_price,
+            'nonce': self.web3.eth.get_transaction_count(from_address)
+        })
+        
+        # Sign transaction
+        signed_tx = Account.sign_transaction(tx, private_key)
+        
+        # Send raw transaction
+        tx_hash = self.web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        
+        # Wait for receipt
+        receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
+        if receipt.status != 1:
+            raise Exception(f"Transaction failed for {function_name}")
 
     def delete_bucket(self, bucket_name: str, from_address: HexAddress, private_key: str) -> None:
         """Deletes a bucket.

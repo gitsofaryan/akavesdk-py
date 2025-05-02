@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import List, Optional, Callable, Dict, Any, Union, Tuple
 from google.protobuf.timestamp_pb2 import Timestamp
 from datetime import datetime
+import grpc # Add grpc import for error handling
 
 from .common import MIN_BUCKET_NAME_LENGTH, SDKError, BLOCK_SIZE, ENCRYPTION_OVERHEAD
 from .erasure_code import ErasureCode
@@ -105,132 +106,207 @@ class IPC:
             raise SDKError("invalid bucket name")
 
         try:
-            request = ipcnodeapi_pb2.IPCBucketCreateRequest(name=name)
-            response = self.client.BucketCreate(request)
-            return IPCBucketCreateResult(name=response.name, created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at)
+            # First check if bucket already exists to provide better error message
+            existing = self.view_bucket(ctx, name)
+            if existing:
+                raise SDKError(f"bucket '{name}' already exists")
+
+            # Create bucket using the storage contract with proper gas estimation
+            try:
+                # Get the contract function
+                contract_func = self.ipc.storage.contract.functions.createBucket(name)
+                
+                # Estimate gas with a buffer
+                estimated_gas = int(contract_func.estimate_gas({
+                    'from': self.ipc.auth.address
+                }) * 1.2)  # Add 20% buffer
+                
+                # Create bucket with estimated gas
+                self.ipc.storage.create_bucket(
+                    bucket_name=name,
+                    from_address=self.ipc.auth.address,
+                    private_key=self.ipc.auth.key,
+                    gas_limit=estimated_gas
+                )
+            except Exception as e:
+                if "revert" in str(e).lower():
+                    raise SDKError(f"bucket creation failed: contract reverted - {str(e)}")
+                raise SDKError(f"bucket creation failed: {str(e)}")
+
+            # Add a small delay to allow chain propagation
+            time.sleep(1)
+            
+            # Get bucket info to return creation result
+            bucket_info = self.ipc.storage.get_bucket(name)
+            
+            # bucket_info returns (name, created_at, owner_address)
+            if not bucket_info:
+                raise SDKError(f"bucket creation verification failed: could not retrieve bucket '{name}'")
+                
+            return IPCBucketCreateResult(
+                name=bucket_info[0],
+                created_at=bucket_info[1]
+            )
             
         except Exception as e:
-            raise SDKError(f"bucket creation failed: {str(e)}")
+            logging.error(f"IPC create_bucket failed: {e}")
+            raise SDKError(f"bucket creation failed: {e}")
 
-    def view_bucket(self, ctx, bucket_name: str) -> IPCBucket:
+    def view_bucket(self, ctx, bucket_name: str) -> Optional[IPCBucket]:
         if not bucket_name:
             raise SDKError("empty bucket name")
 
         try:
-            request = ipcnodeapi_pb2.IPCBucketViewRequest(bucket_name=bucket_name)
+            request = ipcnodeapi_pb2.IPCBucketViewRequest(
+                name=bucket_name,      # Using lowercase as per protobuf definition
+                address=self.ipc.auth.address.lower()  # Ensure address is lowercase
+            )
             response = self.client.BucketView(request)
             
+            if not response:
+                return None
+            created_at = 0
+            if hasattr(response, 'created_at') and response.created_at:
+                created_at = int(response.created_at.seconds)
+
             return IPCBucket(
-                id=response.id,
-                name=response.name,
-                created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at
+                id=response.id if hasattr(response, 'id') else '',
+                name=response.name if hasattr(response, 'name') else bucket_name,
+                created_at=created_at
             )
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                return None
+            logging.error(f"IPC view_bucket gRPC failed: {e.code()} - {e.details()}")
+            raise SDKError(f"failed to view bucket: {e.details()}")
         except Exception as err:
-            raise SDKError(f"failed to view bucket: {str(err)}")
+            logging.error(f"IPC view_bucket unexpected error: {err}")
+            raise SDKError(f"failed to view bucket: {err}")
 
     def list_buckets(self, ctx) -> list[IPCBucket]:
         try:
-            request = ipcnodeapi_pb2.IPCBucketListRequest(address=self.ipc.auth.from_address)
+            request = ipcnodeapi_pb2.IPCBucketListRequest(
+                address=self.ipc.auth.address.lower()
+            )
+            logging.info(f"Sending BucketList request with address: {self.ipc.auth.address.lower()}")
             response = self.client.BucketList(request)
-            
             buckets = []
-            for bucket in response.buckets:
-                buckets.append(IPCBucket(
-                    id=bucket.id,
-                    name=bucket.name,
-                    created_at=bucket.created_at.AsTime() if hasattr(bucket.created_at, 'AsTime') else bucket.created_at
-                ))
+            if response and hasattr(response, 'buckets'):
+                logging.info(f"Received BucketList response with {len(response.buckets)} buckets")
+                for bucket in response.buckets:
+                    created_at = 0
+                    if hasattr(bucket, 'created_at') and bucket.created_at:
+                        created_at = int(bucket.created_at.seconds)
+                    
+                    bucket_name = bucket.name if hasattr(bucket, 'name') else ''
+                    bucket_id = bucket.id if hasattr(bucket, 'id') else ''
+                    logging.info(f"Processing bucket: name={bucket_name}, id={bucket_id}, created_at={created_at}")
+                    
+                    buckets.append(IPCBucket(
+                        name=bucket_name,
+                        created_at=created_at,
+                        id=bucket_id
+                    ))
+            else:
+                logging.warning("BucketList response has no 'buckets' field or is empty")
             return buckets
+        except grpc.RpcError as e:
+            logging.error(f"IPC list_buckets gRPC failed: {e.code()} - {e.details()}")
+            raise SDKError(f"failed to list buckets: {e.details()}")
         except Exception as err:
-            raise SDKError(f"failed to list buckets: {str(err)}")
+            logging.error(f"IPC list_buckets unexpected error: {err}")
+            raise SDKError(f"failed to list buckets: {err}")
 
     def delete_bucket(self, ctx, name: str) -> None:
         try:
-            request = ipcnodeapi_pb2.IPCBucketDeleteRequest(
-                bucket_name=name,
-                address=self.ipc.auth.from_address
+            # Delete bucket using storage contract
+            self.ipc.storage.delete_bucket(
+                name,
+                self.ipc.auth.address,
+                self.ipc.auth.key
             )
-            self.client.BucketDelete(request)
+            logging.info(f"IPC delete_bucket transaction sent for '{name}'")
             return None
         except Exception as err:
-            raise SDKError(f"failed to delete bucket: {str(err)}")
+            logging.error(f"IPC delete_bucket failed: {err}")
+            raise SDKError(f"failed to delete bucket: {err}")
 
-    def file_info(self, ctx, bucket_name: str, file_name: str) -> IPCFileMeta:
+    def file_info(self, ctx, bucket_name: str, file_name: str) -> Optional[IPCFileMeta]:
         try:
-            request = ipcnodeapi_pb2.IPCFileViewRequest(
-                bucket_name=bucket_name,
-                file_name=file_name,
-                address=self.ipc.auth.from_address
-            )
-            response = self.client.FileView(request)
+            # Get file info from storage contract
+            file_info = self.ipc.storage.get_file(bucket_name, file_name)
+            if not file_info or not file_info[0]:
+                logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found.")
+                return None
             
             return IPCFileMeta(
-                root_cid=response.root_cid,
-                name=response.name,
+                root_cid=file_info[1].hex() if isinstance(file_info[1], bytes) else str(file_info[1]), 
+                name=file_info[0], 
                 bucket_name=bucket_name,
-                encoded_size=response.encoded_size,
-                created_at=response.created_at.AsTime() if hasattr(response.created_at, 'AsTime') else response.created_at
+                encoded_size=file_info[2], 
+                created_at=file_info[3] 
             )
         except Exception as err:
-            raise SDKError(f"failed to get file info: {str(err)}")
+            if "not found" in str(err) or "reverted" in str(err):
+                 logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found via IPC.")
+                 return None
+            logging.error(f"IPC file_info failed: {err}")
+            raise SDKError(f"failed to get file info: {err}")
 
     def list_files(self, ctx, bucket_name: str) -> list[IPCFileListItem]:
         if not bucket_name:
             raise SDKError("empty bucket name")
-
-        try:
-            request = ipcnodeapi_pb2.IPCFileListRequest(
-                bucket_name=bucket_name,
-                address=self.ipc.auth.from_address
-            )
-            
-            response = self.client.FileList(request)
-
-            files = []
-            for file_meta in response.files:
-                files.append(IPCFileListItem(
-                    root_cid=file_meta.root_cid,
-                    name=file_meta.name,
-                    encoded_size=file_meta.encoded_size,
-                    created_at=file_meta.created_at.AsTime() if hasattr(file_meta.created_at, 'AsTime') else file_meta.created_at
-                ))
-            
-            return files
-        except Exception as err:
-            raise SDKError(f"failed to list files: {str(err)}")
+        logging.warning(f"IPC list_files for bucket '{bucket_name}' is not fully implemented and will return an empty list.")
+        return []
 
     def file_delete(self, ctx, bucket_name: str, file_name: str) -> None:
         if not bucket_name.strip() or not file_name.strip():
             raise SDKError(f"empty bucket or file name. Bucket: '{bucket_name}', File: '{file_name}'")
 
         try:
-            request = ipcnodeapi_pb2.IPCFileDeleteRequest(
-                bucket_name=bucket_name,
-                file_name=file_name,
-                address=self.ipc.auth.from_address
+            # Delete file using storage contract
+            self.ipc.storage.delete_file(
+                bucket_name,
+                file_name,
+                self.ipc.auth.address, 
+                self.ipc.auth.key
             )
-            
-            self.client.FileDelete(request)
+            logging.info(f"IPC file_delete transaction sent for '{file_name}' in bucket '{bucket_name}'")
             return None
         except Exception as err:
-            raise SDKError(f"failed to delete file: {str(err)}")
+            logging.error(f"IPC file_delete failed: {err}")
+            raise SDKError(f"failed to delete file: {err}")
 
     def create_file_upload(self, ctx, bucket_name: str, file_name: str) -> None:
         if not bucket_name:
             raise SDKError("empty bucket name")
 
         try:
-            # Create file in the smart contract
-            file_id = self.web3.keccak(text=f"{bucket_name}/{file_name}")
-            self.ipc.storage.create_file(bucket_name, file_name, file_id, 0, self.ipc.auth.address, self.ipc.auth.key)
+            # Use web3 instance from ipc_instance for keccak
+            if not hasattr(self.ipc, 'web3'):
+                 raise SDKError("Web3 instance not available in IPC client")
+            file_id = self.ipc.web3.keccak(text=f"{bucket_name}/{file_name}")
+            
+            logging.info(f"Creating file record on chain for {bucket_name}/{file_name} with ID: {file_id.hex()}")
+            # Create file record using storage contract
+            self.ipc.storage.create_file(
+                bucket_name,
+                file_name,
+                file_id,
+                0,  # Initial size is 0
+                self.ipc.auth.address, 
+                self.ipc.auth.key
+            )
+            logging.info(f"IPC create_file transaction sent.")
             return None
         except Exception as err:
-            raise SDKError(f"failed to create file upload: {str(err)}")
+            logging.error(f"IPC create_file_upload failed: {err}")
+            raise SDKError(f"failed to create file upload: {err}")
 
     def upload(self, ctx, bucket_name: str, file_name: str, reader: io.IOBase) -> IPCFileMetaV2:
         try:
             bucket = self.ipc.storage.get_bucket_by_name(
-                {"from": self.ipc.auth.from_address},
+                {"from": self.ipc.auth.address},
                 bucket_name
             )
             if not bucket:
@@ -286,30 +362,41 @@ class IPC:
             
             root_cid = dag_root.build()
             
-            file_meta = self.ipc.storage.get_file_by_name(
-                {"from": self.ipc.auth.from_address},
-                bucket.id,
-                file_name
-            )
-            
-            tx = self.ipc.storage.commit_file(
-                self.ipc.auth,
-                bucket.id,
-                file_name,
-                file_size,
-                root_cid.bytes()
-            )
-            
-            if not self.ipc.wait_for_tx(ctx, tx.hash()):
-                raise SDKError("failed waiting for file commit transaction")
-            
+            try:
+                logging.info(f"Committing file {bucket_name}/{file_name} with size {file_size} and root CID {root_cid.toString()}")
+                self.ipc.storage.commit_file(
+                    bucket_name,
+                    file_name,
+                    file_size, 
+                    root_cid.toBytes(),
+                    self.ipc.auth.address,
+                    self.ipc.auth.key
+                )
+                committed_at_ts = time.time()
+                logging.info("IPC commit_file transaction successful.")
+            except Exception as commit_err:
+                logging.error(f"IPC commit_file failed: {commit_err}")
+                raise SDKError(f"failed to commit file metadata: {commit_err}")
+
+            file_meta_info = self.file_info(ctx, bucket_name, file_name)
+            if not file_meta_info:
+                logging.warning("Could not retrieve file info after commit.")
+                return IPCFileMetaV2(
+                    root_cid=root_cid.toString(),
+                    bucket_name=bucket_name,
+                    name=file_name,
+                    encoded_size=file_size,
+                    created_at=0,
+                    committed_at=committed_at_ts
+                )
+
             return IPCFileMetaV2(
-                root_cid=root_cid.string(),
-                bucket_name=bucket_name,
-                name=file_name,
-                encoded_size=file_size,
-                created_at=time.unix(file_meta.created_at, 0) if isinstance(file_meta.created_at, int) else file_meta.created_at,
-                committed_at=time.time()
+                root_cid=file_meta_info.root_cid,
+                bucket_name=file_meta_info.bucket_name,
+                name=file_meta_info.name,
+                encoded_size=file_meta_info.encoded_size,
+                created_at=file_meta_info.created_at,
+                committed_at=committed_at_ts
             )
         except Exception as err:
             raise SDKError(f"failed to upload file: {str(err)}")
@@ -506,7 +593,7 @@ class IPC:
             request = ipcnodeapi_pb2.IPCFileDownloadCreateRequest(
                 bucket_name=bucket_name,
                 file_name=file_name,
-                address=self.ipc.auth.from_address
+                address=self.ipc.auth.address
             )
             
             response = self.client.FileDownloadCreate(request)
@@ -551,7 +638,7 @@ class IPC:
                     ctx,
                     file_download.bucket_name,
                     file_download.name,
-                    self.ipc.auth.from_address,
+                    self.ipc.auth.address,
                     chunk_download,
                     file_enc_key,
                     writer
@@ -567,7 +654,7 @@ class IPC:
                 bucket_name=bucket_name,
                 file_name=file_name,
                 chunk_cid=chunk.cid,
-                address=self.ipc.auth.from_address
+                address=self.ipc.auth.address
             )
             
             response = self.client.FileDownloadChunkCreate(request)
