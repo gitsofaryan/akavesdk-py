@@ -106,32 +106,28 @@ class IPC:
             raise SDKError("invalid bucket name")
 
         try:
-            # Create bucket using the storage contract with proper gas estimation
-            try:
-                # Create bucket with estimated gas
-                self.ipc.storage.create_bucket(
-                    bucket_name=name,
-                    from_address=self.ipc.auth.address,
-                    private_key=self.ipc.auth.key,
-                    gas_limit=500000  # Using default gas limit
-                )
-            except Exception as e:
-                if "revert" in str(e).lower():
-                    raise SDKError(f"bucket creation failed: contract reverted - {str(e)}")
-                raise SDKError(f"bucket creation failed: {str(e)}")
-
-            # Add a small delay to allow chain propagation
-            time.sleep(1)
+            # Create bucket using the storage contract
+            tx = self.ipc.storage.create_bucket(
+                bucket_name=name,
+                from_address=self.ipc.auth.address,
+                private_key=self.ipc.auth.key,
+                gas_limit=500000
+            )
             
-            # Get bucket info to return creation result
-            bucket_info = self.ipc.storage.get_bucket(name)
+            # Get transaction receipt
+            receipt = self.ipc.web3.eth.wait_for_transaction_receipt(tx)
             
-            if not bucket_info:
-                raise SDKError(f"bucket creation verification failed: could not retrieve bucket '{name}'")
+            # Check if transaction was successful
+            if receipt.status != 1:
+                raise SDKError("bucket creation transaction failed")
                 
+            # Get creation timestamp from block
+            block = self.ipc.web3.eth.get_block(receipt.blockNumber)
+            created_at = block.timestamp
+            
             return IPCBucketCreateResult(
-                name=bucket_info[0],
-                created_at=bucket_info[1]
+                name=name,
+                created_at=created_at
             )
             
         except Exception as e:
@@ -204,22 +200,60 @@ class IPC:
             raise SDKError(f"failed to list buckets: {err}")
 
     def delete_bucket(self, ctx, name: str) -> None:
+        if not name:
+            raise SDKError("empty bucket name")
+
         try:
-            # Delete bucket using storage contract
-            self.ipc.storage.delete_bucket(
-                name,
-                self.ipc.auth.address,
-                self.ipc.auth.key
+            # First check if bucket exists using the same request structure as view_bucket
+            request = ipcnodeapi_pb2.IPCBucketViewRequest(
+                name=name,
+                address=self.ipc.auth.address.lower()
             )
-            logging.info(f"IPC delete_bucket transaction sent for '{name}'")
-            return None
+            
+            try:
+                response = self.client.BucketView(request)
+                if not response:
+                    logging.warning(f"Bucket '{name}' not found, cannot delete")
+                    raise SDKError(f"bucket '{name}' not found")
+            except grpc.RpcError as e:
+                if e.code() == grpc.StatusCode.NOT_FOUND:
+                    logging.warning(f"Bucket '{name}' not found, cannot delete")
+                    raise SDKError(f"bucket '{name}' not found")
+                logging.error(f"IPC bucket view failed during delete: {e.code()} - {e.details()}")
+                raise SDKError(f"failed to check bucket existence: {e.details()}")
+
+            # If we get here, bucket exists - proceed with deletion
+            try:
+                tx = self.ipc.storage.delete_bucket(
+                    name,
+                    self.ipc.auth.address,
+                    self.ipc.auth.key
+                )
+                logging.info(f"IPC delete_bucket transaction sent for '{name}'")
+                
+                # Get transaction receipt and verify status
+                receipt = self.ipc.web3.eth.wait_for_transaction_receipt(tx)
+                if receipt.status != 1:
+                    # Try to get revert reason
+                    try:
+                        self.ipc.storage.contract.functions.deleteBucket(name).call({
+                            'from': self.ipc.auth.address
+                        })
+                    except Exception as e:
+                        raise SDKError(f"Transaction reverted: {str(e)}")
+                    raise SDKError(f"Transaction failed. Receipt: {receipt}")
+                
+                return None
+            except Exception as e:
+                logging.error(f"Failed to delete bucket '{name}' on blockchain: {str(e)}")
+                raise SDKError(f"blockchain transaction failed: {str(e)}")
+                
         except Exception as err:
             logging.error(f"IPC delete_bucket failed: {err}")
             raise SDKError(f"failed to delete bucket: {err}")
 
     def file_info(self, ctx, bucket_name: str, file_name: str) -> Optional[IPCFileMeta]:
         try:
-            # Get file info from storage contract
             file_info = self.ipc.storage.get_file(bucket_name, file_name)
             if not file_info or not file_info[0]:
                 logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found.")

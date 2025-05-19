@@ -320,21 +320,29 @@ class StorageContract:
         if receipt.status != 1:
             raise Exception(f"Transaction failed for {function_name}")
 
-    def delete_bucket(self, bucket_name: str, from_address: HexAddress, private_key: str) -> None:
+    def delete_bucket(self, bucket_name: str, from_address: HexAddress, private_key: str) -> HexStr:
         """Deletes a bucket.
         
         Args:
             bucket_name: Name of the bucket to delete
             from_address: Address deleting the bucket
             private_key: Private key for signing the transaction
+            
+        Returns:
+            Transaction hash of the delete operation
+            
+        Raises:
+            Exception: If the transaction fails or is reverted
         """
         # Build transaction
-        tx = self.contract.functions.deleteBucket(bucket_name).build_transaction({
+        tx_params = {
             'from': from_address,
             'gas': 500000,  # Gas limit
             'gasPrice': self.web3.eth.gas_price,
             'nonce': self.web3.eth.get_transaction_count(from_address)
-        })
+        }
+            
+        tx = self.contract.functions.deleteBucket(bucket_name).build_transaction(tx_params)
         
         # Sign transaction
         signed_tx = Account.sign_transaction(tx, private_key)
@@ -342,10 +350,7 @@ class StorageContract:
         # Send raw transaction
         tx_hash = self.web3.eth.send_raw_transaction(signed_tx.rawTransaction)
         
-        # Wait for receipt
-        receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
-        if receipt.status != 1:
-            raise Exception("Transaction failed")
+        return tx_hash
 
     def delete_file(self, bucket_name: str, file_name: str, from_address: HexAddress, private_key: str) -> None:
         """Deletes a file.
