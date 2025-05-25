@@ -253,24 +253,43 @@ class IPC:
             raise SDKError(f"failed to delete bucket: {err}")
 
     def file_info(self, ctx, bucket_name: str, file_name: str) -> Optional[IPCFileMeta]:
+        if not bucket_name:
+            raise SDKError("empty bucket name")
+        
+        if not file_name:
+            raise SDKError("empty file name")
+
         try:
-            file_info = self.ipc.storage.get_file(bucket_name, file_name)
-            if not file_info or not file_info[0]:
+            request = ipcnodeapi_pb2.IPCFileViewRequest(
+                bucket_name=bucket_name,
+                file_name=file_name,
+                address=self.ipc.auth.address.lower()
+            )
+            response = self.client.FileView(request)
+            
+            if not response:
                 logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found.")
                 return None
             
+            created_at = 0
+            if hasattr(response, 'created_at') and response.created_at:
+                created_at = int(response.created_at.seconds)
+            
             return IPCFileMeta(
-                root_cid=file_info[1].hex() if isinstance(file_info[1], bytes) else str(file_info[1]), 
-                name=file_info[0], 
-                bucket_name=bucket_name,
-                encoded_size=file_info[2], 
-                created_at=file_info[3] 
+                root_cid=response.root_cid if hasattr(response, 'root_cid') else '',
+                name=response.file_name if hasattr(response, 'file_name') else file_name,
+                bucket_name=response.bucket_name if hasattr(response, 'bucket_name') else bucket_name,
+                encoded_size=response.encoded_size if hasattr(response, 'encoded_size') else 0,
+                created_at=created_at
             )
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found via gRPC.")
+                return None
+            logging.error(f"IPC file_info gRPC failed: {e.code()} - {e.details()}")
+            raise SDKError(f"failed to get file info: {e.details()}")
         except Exception as err:
-            if "not found" in str(err) or "reverted" in str(err):
-                 logging.info(f"File '{file_name}' in bucket '{bucket_name}' not found via IPC.")
-                 return None
-            logging.error(f"IPC file_info failed: {err}")
+            logging.error(f"IPC file_info unexpected error: {err}")
             raise SDKError(f"failed to get file info: {err}")
 
     def list_files(self, ctx, bucket_name: str) -> list[IPCFileListItem]:
