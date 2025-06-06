@@ -8,7 +8,7 @@ from hashlib import sha256
 from typing import List, Optional, Callable, Dict, Any, Union, Tuple
 from google.protobuf.timestamp_pb2 import Timestamp
 from datetime import datetime
-import grpc # Add grpc import for error handling
+import grpc 
 
 from .common import MIN_BUCKET_NAME_LENGTH, SDKError, BLOCK_SIZE, ENCRYPTION_OVERHEAD
 from .erasure_code import ErasureCode
@@ -106,22 +106,17 @@ class IPC:
             raise SDKError("invalid bucket name")
 
         try:
-            # Create bucket using the storage contract
             tx = self.ipc.storage.create_bucket(
                 bucket_name=name,
                 from_address=self.ipc.auth.address,
                 private_key=self.ipc.auth.key,
                 gas_limit=500000
             )
-            
-            # Get transaction receipt
             receipt = self.ipc.web3.eth.wait_for_transaction_receipt(tx)
             
-            # Check if transaction was successful
             if receipt.status != 1:
                 raise SDKError("bucket creation transaction failed")
                 
-            # Get creation timestamp from block
             block = self.ipc.web3.eth.get_block(receipt.blockNumber)
             created_at = block.timestamp
             
@@ -137,11 +132,10 @@ class IPC:
     def view_bucket(self, ctx, bucket_name: str) -> Optional[IPCBucket]:
         if not bucket_name:
             raise SDKError("empty bucket name")
-
         try:
             request = ipcnodeapi_pb2.IPCBucketViewRequest(
-                name=bucket_name,      # Using lowercase as per protobuf definition
-                address=self.ipc.auth.address.lower()  # Ensure address is lowercase
+                name=bucket_name,     
+                address=self.ipc.auth.address.lower() 
             )
             response = self.client.BucketView(request)
             
@@ -183,7 +177,6 @@ class IPC:
                     bucket_name = bucket.name if hasattr(bucket, 'name') else ''
                     bucket_id = bucket.id if hasattr(bucket, 'id') else ''
                     logging.info(f"Processing bucket: name={bucket_name}, id={bucket_id}, created_at={created_at}")
-                    
                     buckets.append(IPCBucket(
                         name=bucket_name,
                         created_at=created_at,
@@ -220,7 +213,6 @@ class IPC:
                 raise SDKError(f"failed to check bucket existence: {e.details()}")
 
             # If we get here, bucket exists - proceed with deletion
-            # Get bucket ID from IPC response like Go SDK does
             bucket_id_hex = response.id if hasattr(response, 'id') and response.id else None
             if not bucket_id_hex:
                 logging.error(f"No bucket ID returned from IPC for bucket '{name}'")
@@ -233,11 +225,9 @@ class IPC:
                     bucket_name=name,
                     from_address=self.ipc.auth.address,
                     private_key=self.ipc.auth.key,
-                    bucket_id_hex=bucket_id_hex  # Pass the bucket ID from IPC response
+                    bucket_id_hex=bucket_id_hex  # bucket ID from IPC response
                 )
                 logging.info(f"IPC delete_bucket transaction sent for '{name}', tx_hash: {tx_hash}")
-                
-                # The storage contract delete_bucket method already handles receipt verification
                 # If we get here, the transaction was successful
                 return None
                 

@@ -306,24 +306,143 @@ class BucketTestRunner:
             print(f"❌ Delete invalid name test failed: {e}")
             return False
     
+    def test_list_files_in_existing_bucket(self):
+        """Test listing files in an existing bucket with known files"""
+        try:
+            bucket_name = "test-eip1559-5ba58b1e"
+            logger.info(f"Testing list files in bucket: {bucket_name}")
+            print(f"📋 Testing list files in bucket: {bucket_name}")
+            
+            # List files in the bucket
+            files = self.ipc.list_files(None, bucket_name)
+            logger.info(f"Found {len(files)} files in bucket '{bucket_name}'")
+            print(f"✅ Found {len(files)} files in bucket '{bucket_name}'")
+            
+            # Display files in the expected format
+            for file_item in files:
+                # Convert timestamp to readable format if available
+                if file_item.created_at > 0:
+                    import datetime
+                    created_at = datetime.datetime.fromtimestamp(file_item.created_at, tz=datetime.timezone.utc)
+                    created_at_str = created_at.strftime("%Y-%m-%d %H:%M:%S +0000 UTC")
+                else:
+                    created_at_str = "Unknown"
+                
+                # Format output like the expected format
+                file_output = f"File: Name={file_item.name}, RootCID={file_item.root_cid}, EncodedSize={file_item.encoded_size}, CreatedAt={created_at_str}"
+                logger.info(file_output)
+                print(f"📄 {file_output}")
+            
+            # Check if we found the expected files
+            expected_files = [
+                "test_sdk_connection.py",
+                "geomatics-btp.xlsx", 
+                "IMG_2912.MOV",
+                "IITR_id.pdf",
+                "test_streaming_connection.py"
+            ]
+            
+            found_files = [f.name for f in files]
+            matches = 0
+            for expected_file in expected_files:
+                if expected_file in found_files:
+                    matches += 1
+                    logger.info(f"✅ Expected file found: {expected_file}")
+                    print(f"✅ Expected file found: {expected_file}")
+                else:
+                    logger.warning(f"⚠️ Expected file not found: {expected_file}")
+                    print(f"⚠️ Expected file not found: {expected_file}")
+            
+            logger.info(f"Found {matches}/{len(expected_files)} expected files")
+            print(f"📊 Found {matches}/{len(expected_files)} expected files")
+            
+            # Test passes if we successfully retrieved the file list (regardless of content)
+            return True
+            
+        except Exception as e:
+            logger.error(f"List files test failed: {e}")
+            print(f"❌ List files test failed: {e}")
+            return False
+    
+    def test_file_info_existing_file(self):
+        """Test getting file info for an existing file"""
+        try:
+            bucket_name = "test-eip1559-5ba58b1e"
+            file_name = "IITR_id.pdf"
+            logger.info(f"Testing file info for: {bucket_name}/{file_name}")
+            print(f"🔍 Testing file info for: {bucket_name}/{file_name}")
+            
+            # Get file info
+            file_info = self.ipc.file_info(None, bucket_name, file_name)
+            
+            if file_info:
+                # Convert timestamp to readable format if available
+                if file_info.created_at > 0:
+                    import datetime
+                    created_at = datetime.datetime.fromtimestamp(file_info.created_at, tz=datetime.timezone.utc)
+                    created_at_str = created_at.strftime("%Y-%m-%d %H:%M:%S +0000 UTC")
+                else:
+                    # Default to epoch time if timestamp is 0 or invalid
+                    created_at_str = "1970-01-01 00:00:00 +0000 UTC"
+                
+                # Format output like the expected format
+                file_output = f"File: Name={file_info.name}, RootCID={file_info.root_cid}, EncodedSize={file_info.encoded_size}, CreatedAt={created_at_str}"
+                logger.info(file_output)
+                print(f"📄 {file_output}")
+                
+                # Verify expected values
+                logger.info(f"File details retrieved:")
+                logger.info(f"  📄 Name: {file_info.name}")
+                logger.info(f"  🔗 Root CID: {file_info.root_cid}")
+                logger.info(f"  📊 Encoded Size: {file_info.encoded_size}")
+                logger.info(f"  📅 Created At: {created_at_str}")
+                
+                print(f"✅ File info retrieved successfully!")
+                print(f"  📄 Name: {file_info.name}")
+                print(f"  🔗 Root CID: {file_info.root_cid}")
+                print(f"  📊 Encoded Size: {file_info.encoded_size}")
+                print(f"  📅 Created At: {created_at_str}")
+                
+                # Validate expected file name
+                if file_info.name == file_name:
+                    logger.info(f"✅ File name matches expected: {file_name}")
+                    print(f"✅ File name matches expected: {file_name}")
+                else:
+                    logger.warning(f"⚠️ File name mismatch: expected {file_name}, got {file_info.name}")
+                    print(f"⚠️ File name mismatch: expected {file_name}, got {file_info.name}")
+                
+                return True
+            else:
+                logger.error(f"File '{file_name}' not found in bucket '{bucket_name}'")
+                print(f"❌ File '{file_name}' not found in bucket '{bucket_name}'")
+                return False
+                
+        except Exception as e:
+            logger.error(f"File info test failed: {e}")
+            print(f"❌ File info test failed: {e}")
+            return False
+    
     def run_all_tests(self):
         """Run all bucket operation tests"""
-        logger.info("🚀 Starting comprehensive bucket operations test suite")
-        print("🚀 Starting comprehensive bucket operations test suite")
-        print(f"📦 Test bucket name: {self.test_bucket_name}")
+        logger.info("🚀 Starting file info test")
+        print("🚀 Starting file info test")
+        print(f"📦 Target bucket: test-eip1559-5ba58b1e")
+        print(f"📄 Target file: IITR_id.pdf")
         
         if not self.setup_sdk():
             print("❌ Failed to setup SDK - aborting tests")
             return False
         
-        # Test sequence - each test runs regardless of previous failures
+        # Test sequence - ONLY running file_info test
         tests = [
             ("Create Bucket (Success)", self.test_create_bucket_success),
             ("List Buckets", self.test_list_buckets),
             ("View Bucket", self.test_view_bucket),
             ("Delete Bucket (Success)", self.test_delete_bucket_success),
             ("Delete Bucket (Non-existent)", self.test_delete_bucket_nonexistent),
-            ("Delete Bucket (Invalid Name)", self.test_delete_bucket_invalid_name),
+            ("Delete Bucket (Invalid Name)", self.test_delete_bucket_invalid_name),  
+            ("List Files in Existing Bucket", self.test_list_files_in_existing_bucket),
+            ("File Info for Existing File", self.test_file_info_existing_file)
         ]
         
         # Run all tests

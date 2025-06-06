@@ -122,9 +122,10 @@ class SDK:
             return self._contract_info
             
         # Try multiple endpoints for contract fetching
+        # TEMPORARILY DISABLED connect.akave.ai due to DNS issues
         endpoints = [
             'yucca.akave.ai:5500',
-            'connect.akave.ai:5500'
+            # 'connect.akave.ai:5500'  # DNS resolution failing
         ]
         
         for endpoint in endpoints:
