@@ -14,7 +14,7 @@ import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from .common import SDKError
-from .model import FileMeta, FileListItem
+from .model import FileMeta
 from .erasure_code import ErasureCode
 from private.pb import nodeapi_pb2
 from private.pb import nodeapi_pb2_grpc

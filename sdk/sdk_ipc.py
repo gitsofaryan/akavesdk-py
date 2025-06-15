@@ -228,7 +228,6 @@ class IPC:
                     bucket_id_hex=bucket_id_hex  # bucket ID from IPC response
                 )
                 logging.info(f"IPC delete_bucket transaction sent for '{name}', tx_hash: {tx_hash}")
-                # If we get here, the transaction was successful
                 return None
                 
             except Exception as e:
@@ -326,15 +325,44 @@ class IPC:
             raise SDKError(f"empty bucket or file name. Bucket: '{bucket_name}', File: '{file_name}'")
 
         try:
-            # Delete file using storage contract
-            self.ipc.storage.delete_file(
-                bucket_name,
-                file_name,
-                self.ipc.auth.address, 
-                self.ipc.auth.key
+            encrypted_file_name = file_name
+            encrypted_bucket_name = bucket_name
+            
+            bucket = self.ipc.storage.get_bucket_by_name(
+                {"from": self.ipc.auth.address},
+                encrypted_bucket_name
             )
-            logging.info(f"IPC file_delete transaction sent for '{file_name}' in bucket '{bucket_name}'")
+            if not bucket:
+                raise SDKError("failed to retrieve bucket")
+            
+            bucket_id = bucket[0]  # bytes32 id
+            
+            file_info = self.ipc.storage.get_file_by_name(
+                {}, 
+                bucket_id,
+                encrypted_file_name
+            )
+            if not file_info:
+                raise SDKError("failed to retrieve file - file does not exist")
+            
+            file_id = file_info[0]  # bytes32 file ID
+            file_index = self.ipc.storage.get_file_index_by_id(
+                {},
+                encrypted_file_name,
+                bucket_id 
+            )
+            logging.info(f"Deleting file with file_id: {file_id.hex() if isinstance(file_id, bytes) else file_id}, bucket_id: {bucket_id.hex() if isinstance(bucket_id, bytes) else bucket_id}, name: {encrypted_file_name}, index: {file_index}")
+            tx_hash = self.ipc.storage.delete_file(
+                self.ipc.auth,          
+                file_id,                
+                bucket_id,              
+                encrypted_file_name,    
+                file_index             
+            )
+            
+            logging.info(f"IPC file_delete transaction successful for '{file_name}' in bucket '{bucket_name}', tx_hash: {tx_hash}")
             return None
+            
         except Exception as err:
             logging.error(f"IPC file_delete failed: {err}")
             raise SDKError(f"failed to delete file: {err}")
