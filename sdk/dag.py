@@ -1,15 +1,15 @@
 import io
 import hashlib
-import struct
 from typing import List, Optional, Any, BinaryIO
 from dataclasses import dataclass
 
 try:
     from multiformats import CID, multihash
     from multiformats.multicodec import multicodec
-    MULTIFORMATS_AVAILABLE = True
+    from ipld_dag_pb import PBNode, PBLink, encode, decode, prepare, code as dag_pb_code
+    IPLD_AVAILABLE = True
 except ImportError:
-    MULTIFORMATS_AVAILABLE = False
+    IPLD_AVAILABLE = False
     class CID:
         def __init__(self, cid_str):
             self.cid_str = cid_str
@@ -36,7 +36,6 @@ except ImportError:
 from private.encryption.encryption import encrypt
 from .model import FileBlockUpload
 
-# IPFS constants matching Go implementation
 DEFAULT_CID_VERSION = 1
 DAG_PB_CODEC = 0x70
 RAW_CODEC = 0x55
@@ -44,8 +43,7 @@ RAW_CODEC = 0x55
 class DAGError(Exception):
     pass
 
-class DAGRoot:
-    
+class DAGRoot:    
     def __init__(self):
         self.links = []  # Store chunk links
         self.total_file_size = 0  # Total raw data size across all chunks
@@ -62,9 +60,17 @@ class DAGRoot:
         else:
             cid_str = chunk_cid
             
+        if IPLD_AVAILABLE:
+            try:
+                cid_obj = CID.decode(cid_str)
+            except:
+                cid_obj = cid_str
+        else:
+            cid_obj = cid_str
+            
         self.links.append({
-            "cid": cid_str,
-            "name": "",  # Empty name for file chunks
+            "cid": cid_obj,
+            "name": "",  
             "size": proto_node_size
         })
         
@@ -77,84 +83,39 @@ class DAGRoot:
         if len(self.links) == 1:
             return self.links[0]["cid"]
         
+        if not IPLD_AVAILABLE:
+            import base64
+            cid_str = "bafybeig" + base64.b32encode(hashlib.sha256(str(len(self.links)).encode()).digest()).decode().lower().rstrip('=')[:50]
+            return cid_str
+        
         try:
-            unixfs_data = self._create_unixfs_file_data()
-            dag_pb_data = self._create_dag_pb_node(unixfs_data, self.links)
+            pb_links = []
+            for link in self.links:
+                pb_link = PBLink(
+                    name="", 
+                    cid=link["cid"],
+                    size=link["size"]
+                )
+                pb_links.append(pb_link)
             
-            root_cid = self._generate_dag_pb_cid(dag_pb_data)
+            unixfs_data = self._create_unixfs_file_data()
+            pb_node = PBNode(data=unixfs_data, links=pb_links)
+            encoded_bytes = encode(pb_node)
+            digest = multihash.digest(encoded_bytes, "sha2-256")
+            root_cid = CID("base32", 1, dag_pb_code, digest)
+            
             return root_cid
             
         except Exception as e:
             raise DAGError(f"failed to build DAG root: {str(e)}")
     
     def _create_unixfs_file_data(self) -> bytes:
-        unixfs_data = bytes([0x08, 0x02])  # field 1, type = file
+        unixfs_data = bytes([0x08, 0x02])  
         
         if self.total_file_size > 0:
             unixfs_data += bytes([0x18]) + self._encode_varint(self.total_file_size)
         
         return unixfs_data
-    
-    def _create_dag_pb_node(self, data: bytes, links: List[dict]) -> bytes:
-        pb_data = b''
-        
-        # Add links (field 2)
-        for link in links:
-            link_data = self._encode_pb_link(link)
-            pb_data += bytes([0x12]) + self._encode_varint(len(link_data)) + link_data
-        
-        if data:
-            pb_data += bytes([0x0a]) + self._encode_varint(len(data)) + data
-        
-        return pb_data
-    
-    def _encode_pb_link(self, link: dict) -> bytes:
-        link_data = b''
-        
-        # Hash field (field 1) - CID bytes
-        cid_bytes = self._cid_to_bytes(link["cid"])
-        link_data += bytes([0x0a]) + self._encode_varint(len(cid_bytes)) + cid_bytes
-        
-        # Name field (field 2)
-        name = link.get("name", "")
-        if name:
-            name_bytes = name.encode('utf-8')
-            link_data += bytes([0x12]) + self._encode_varint(len(name_bytes)) + name_bytes
-        
-        # Tsize field (field 3)
-        size = link.get("size", 0)
-        if size > 0:
-            link_data += bytes([0x18]) + self._encode_varint(size)
-        
-        return link_data
-    
-    def _cid_to_bytes(self, cid_str: str) -> bytes:
-        try:
-            if MULTIFORMATS_AVAILABLE:
-                cid_obj = CID.decode(cid_str)
-                return cid_obj.bytes
-            else:
-                return hashlib.sha256(cid_str.encode()).digest()
-        except:
-            return hashlib.sha256(cid_str.encode()).digest()
-    
-    def _generate_dag_pb_cid(self, data: bytes) -> str:
-        hash_digest = hashlib.sha256(data).digest()
-        
-        if MULTIFORMATS_AVAILABLE:
-            try:
-                mh = multihash.digest(hash_digest, 'sha2-256')
-                cid = CID('base32', 1, 'dag-pb', mh)
-                return str(cid)
-            except:
-                pass
-        
-        import base64
-        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
-        char_map = str.maketrans('01', 'ab')
-        b32_hash = b32_hash.translate(char_map)
-        cid_str = f"bafybeig{b32_hash[:50]}"
-        return cid_str
     
     def _encode_varint(self, value: int) -> bytes:
         result = b''
@@ -166,11 +127,10 @@ class DAGRoot:
 
 @dataclass 
 class ChunkDAG:   
-   
-    cid: str                        # Chunk CID  
-    raw_data_size: int             # Size of data read from disk
-    proto_node_size: int           # Size of the ProtoNode in the DAG (RawDataSize + protonode overhead)
-    blocks: List[FileBlockUpload]  # List of blocks in chunk
+    cid: Any                           # Chunk CID (CID object or string)
+    raw_data_size: int                 # Size of original data
+    proto_node_size: int               # Size of encoded DAG-PB node
+    blocks: List[FileBlockUpload]      # Blocks in the chunk
 
 def build_dag(ctx: Any, reader: BinaryIO, block_size: int, enc_key: Optional[bytes] = None) -> ChunkDAG:
     try:
@@ -179,197 +139,235 @@ def build_dag(ctx: Any, reader: BinaryIO, block_size: int, enc_key: Optional[byt
             raise DAGError("empty data")
         
         raw_data_size = len(data)
-        
         if enc_key and len(enc_key) > 0:
             data = encrypt(enc_key, data, b"dag_encryption")
         
-        blocks = []
-        offset = 0
-        
-        while offset < len(data):
-            end_offset = min(offset + block_size, len(data))
-            block_data = data[offset:end_offset]
+        if len(data) <= block_size:
+            chunk_cid, encoded_data = _create_unixfs_file_node(data)
+            proto_node_size = len(encoded_data)
             
-            block_cid = _generate_block_cid(block_data)
+            blocks = [FileBlockUpload(
+                cid=str(chunk_cid) if hasattr(chunk_cid, '__str__') else chunk_cid,
+                data=encoded_data
+            )]
+        else:
+            blocks = []
+            offset = 0
             
-            block = FileBlockUpload(
-                cid=block_cid,
-                data=block_data
-            )
-            blocks.append(block)
-            
-            offset = end_offset
-        
+            while offset < len(data):
+                end_offset = min(offset + block_size, len(data))
+                block_data = data[offset:end_offset]
+                block_cid, block_encoded_data = _create_unixfs_file_node(block_data)       
+                block = FileBlockUpload(
+                    cid=str(block_cid) if hasattr(block_cid, '__str__') else block_cid,
+                    data=block_encoded_data
+                )
+                blocks.append(block)
+                
+                offset = end_offset
+                chunk_cid, proto_node_size = _create_chunk_dag_node(blocks)
         if not blocks:
             raise DAGError("no blocks created")
-        
-        if len(blocks) == 1:
-            chunk_cid = blocks[0].cid
-            proto_node_size = len(blocks[0].data)
-        else:
-            chunk_dag_data = _create_chunk_dag_node(blocks)
-            chunk_cid = _generate_block_cid(chunk_dag_data)
-            proto_node_size = len(chunk_dag_data)
-        
         return ChunkDAG(
             cid=chunk_cid,
             raw_data_size=raw_data_size,
             proto_node_size=proto_node_size,
             blocks=blocks
-        )
-        
+        )    
     except Exception as e:
         raise DAGError(f"failed to build chunk DAG: {str(e)}")
 
-def _generate_block_cid(data: bytes) -> str:
-    hash_digest = hashlib.sha256(data).digest()
+def _generate_raw_block_cid(data: bytes):
+    if not IPLD_AVAILABLE:
+        hash_digest = hashlib.sha256(data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafkreig{b32_hash[:50]}"
     
-    if MULTIFORMATS_AVAILABLE:
-        try:
-            mh = multihash.digest(hash_digest, 'sha2-256')
-            cid = CID('base32', 1, 'raw', mh)
-            return str(cid)
-        except:
-            pass
-    
-    # Fallback: create CID-like string with raw prefix
-    import base64
-    b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
-    # Ensure valid base32 characters  
-    char_map = str.maketrans('01', 'ab')
-    b32_hash = b32_hash.translate(char_map)
-    cid_str = f"bafkreig{b32_hash[:50]}"  # bafkreig prefix for raw blocks
-    return cid_str
+    try:
+        digest = multihash.digest(data, "sha2-256")
+        cid = CID("base32", 1, RAW_CODEC, digest)
+        return cid
+    except Exception:
+        hash_digest = hashlib.sha256(data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafkreig{b32_hash[:50]}"
 
-def _create_chunk_dag_node(blocks: List[FileBlockUpload]) -> bytes:
-    links = []
-    for i, block in enumerate(blocks):
-        links.append({
-            "cid": block.cid,
-            "name": "",  # Empty name for data blocks
-            "size": len(block.data)
-        })
+def _create_unixfs_file_node(data: bytes):
+    if not IPLD_AVAILABLE:
+        hash_digest = hashlib.sha256(data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafybeig{b32_hash[:50]}", data
     
-    dag_root = DAGRoot()
-    pb_data = dag_root._create_dag_pb_node(b"", links)
-    return pb_data
+    try:
+        unixfs_data = bytes([0x08, 0x02])  # type = file
+        
+        if len(data) > 0:
+            unixfs_data += bytes([0x22]) + _encode_varint(len(data)) + data
+            pb_node = PBNode(data=unixfs_data, links=[])
+            encoded_bytes = encode(pb_node)
+        
+        digest = multihash.digest(encoded_bytes, "sha2-256")
+        cid = CID("base32", 1, dag_pb_code, digest)
+        
+        return cid, encoded_bytes
+        
+    except Exception as e:
+        # Fallback
+        hash_digest = hashlib.sha256(data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafybeig{b32_hash[:50]}", data
+
+def _encode_unixfs_file_node(data: bytes) -> bytes:
+    if not IPLD_AVAILABLE:
+        return data
+    
+    try:
+        unixfs_data = bytes([0x08, 0x02])   
+        if len(data) > 0:
+            unixfs_data += bytes([0x22]) + _encode_varint(len(data)) + data
+        
+        pb_node = PBNode(data=unixfs_data, links=[])
+        encoded_bytes = encode(pb_node)
+        
+        return encoded_bytes
+        
+    except Exception:
+        return data
+
+def _create_chunk_dag_node(blocks: List[FileBlockUpload]):
+    if not IPLD_AVAILABLE:
+        # Fallback
+        combined_data = b"".join([block.data for block in blocks])
+        hash_digest = hashlib.sha256(combined_data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafybeig{b32_hash[:50]}", len(combined_data)
+    
+    try:
+        pb_links = []
+        for i, block in enumerate(blocks):
+            block_cid = CID.decode(block.cid) if isinstance(block.cid, str) else block.cid
+            pb_link = PBLink(
+                name="",  # Empty name for data blocks
+                cid=block_cid,
+                size=len(block.data)
+            )
+            pb_links.append(pb_link)
+        
+        unixfs_data = bytes([0x08, 0x02]) 
+        pb_node = PBNode(data=unixfs_data, links=pb_links)
+        encoded_bytes = encode(pb_node)
+        digest = multihash.digest(encoded_bytes, "sha2-256")
+        cid = CID("base32", 1, dag_pb_code, digest)
+        
+        return cid, len(encoded_bytes)
+        
+    except Exception as e:
+        combined_data = b"".join([block.data for block in blocks])
+        hash_digest = hashlib.sha256(combined_data).digest()
+        import base64
+        b32_hash = base64.b32encode(hash_digest).decode().lower().rstrip('=')
+        char_map = str.maketrans('01', 'ab')
+        b32_hash = b32_hash.translate(char_map)
+        return f"bafybeig{b32_hash[:50]}", len(combined_data)
+
+def _encode_varint(value: int) -> bytes:
+    result = b''
+    while value > 127:
+        result += bytes([(value & 127) | 128])
+        value >>= 7
+    result += bytes([value & 127])
+    return result
 
 def extract_block_data(cid_str: str, data: bytes) -> bytes:
     try:
-        if MULTIFORMATS_AVAILABLE:
-            try:
-                cid_obj = CID.decode(cid_str)
-                cid_type = cid_obj.codec
-            except:
-                if cid_str.startswith('bafkreig'):
-                    cid_type = RAW_CODEC
-                else:
-                    cid_type = DAG_PB_CODEC
-        else:
+        if not IPLD_AVAILABLE:
+            return data
+            
+        try:
+            cid_obj = CID.decode(cid_str)
+            cid_type = cid_obj.codec
+        except:
             if cid_str.startswith('bafkreig'):
                 cid_type = RAW_CODEC
             else:
                 cid_type = DAG_PB_CODEC
         
-        # Handle different CID types (matches Go switch statement)
         if cid_type == DAG_PB_CODEC:
-            # DAG-PB format - extract UnixFS data
-            return _extract_unixfs_data(data)
+            try:
+                pb_node = decode(data)
+                if pb_node.data:
+                    return _extract_unixfs_data(pb_node.data)
+                else:
+                    return b""
+            except Exception:
+                return data
         elif cid_type == RAW_CODEC:
-            # Raw format - return data as-is
             return data
         else:
             raise DAGError(f"unknown CID type: {cid_type}")
             
-    except Exception as e:
+    except Exception:
         return data
 
-def _extract_unixfs_data(pb_data: bytes) -> bytes:
+def _extract_unixfs_data(unixfs_bytes: bytes) -> bytes:
     try:
+       
         offset = 0
-        data_content = b""
-        
-        while offset < len(pb_data):
-            if offset >= len(pb_data):
+        while offset < len(unixfs_bytes):
+            if offset >= len(unixfs_bytes):
                 break
                 
-            # Read field header
-            tag = pb_data[offset]
+            field_tag = unixfs_bytes[offset]
             offset += 1
             
-            field_num = tag >> 3
-            wire_type = tag & 0x07
-            
-            if wire_type == 2:  # Length-delimited
-                # Read length
-                length, length_bytes = _decode_varint(pb_data, offset)
-                offset += length_bytes
+            if field_tag == 0x22:  # Field 4 (Data)
+                length, bytes_read = _decode_varint(unixfs_bytes[offset:])
+                offset += bytes_read
                 
-                # Read data
-                field_data = pb_data[offset:offset + length]
-                offset += length
-                
-                if field_num == 1:  # Data field
-                    data_content = _extract_from_unixfs(field_data)
+                if offset + length <= len(unixfs_bytes):
+                    return unixfs_bytes[offset:offset + length]
+                else:
                     break
-            else:
-                break
-        
-        return data_content if data_content else pb_data
-        
-    except:
-        return pb_data
-
-def _extract_from_unixfs(unixfs_data: bytes) -> bytes:
-    try:
-        offset = 0
-        
-        while offset < len(unixfs_data):
-            if offset >= len(unixfs_data):
-                break
-                
-            tag = unixfs_data[offset]
-            offset += 1
-            
-            field_num = tag >> 3
-            wire_type = tag & 0x07
-            
-            if field_num == 3 and wire_type == 2:  # Data field (field 3)
-                length, length_bytes = _decode_varint(unixfs_data, offset)
-                offset += length_bytes
-                
-                return unixfs_data[offset:offset + length]
-            elif wire_type == 2:  # Length-delimited, skip
-                length, length_bytes = _decode_varint(unixfs_data, offset)
-                offset += length_bytes + length
+            elif field_tag & 0x07 == 2:  # Length-delimited field
+                length, bytes_read = _decode_varint(unixfs_bytes[offset:])
+                offset += bytes_read + length
             else:
                 offset += 1
-        
         return b""
         
-    except:
+    except Exception:
         return b""
 
-def _decode_varint(data: bytes, offset: int) -> tuple[int, int]:
-    result = 0
+def _decode_varint(data: bytes) -> tuple[int, int]:
+    value = 0
     shift = 0
     bytes_read = 0
     
-    while offset + bytes_read < len(data):
-        byte = data[offset + bytes_read]
+    for byte in data:
         bytes_read += 1
-        
-        result |= (byte & 0x7F) << shift
-        
+        value |= (byte & 0x7F) << shift
         if (byte & 0x80) == 0:
             break
-            
         shift += 7
-        
         if shift >= 64:
             raise ValueError("varint too long")
     
-    return result, bytes_read
+    return value, bytes_read
 
 def block_by_cid(blocks: List[FileBlockUpload], cid_str: str) -> tuple[FileBlockUpload, bool]:
     for block in blocks:
