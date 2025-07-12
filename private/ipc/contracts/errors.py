@@ -1,17 +1,6 @@
 import web3
 from typing import Dict, Optional, List
-
-# List of known error strings from the smart contracts
-# Replace these with the actual error strings from your contracts
-_KNOWN_ERROR_STRINGS: List[str] = [
-    "Storage: bucket doesn't exist",
-    "Storage: bucket exists",
-    "Storage: file doesn't exist",
-    "Storage: file exists",
-    "AccessManager: caller is not the owner",
-    "AccessManager: caller is not authorized",
-    # Add all other known error strings here...
-]
+from sdk.config import _KNOWN_ERROR_STRINGS
 
 # Dictionary to store the mapping from error hash (selector) to error string
 _error_hash_to_error_map: Dict[str, str] = {}
