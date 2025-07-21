@@ -39,7 +39,7 @@ try:
 except ImportError:
     DAG_PB_AVAILABLE = False
 
-from private.encryption.encryption import encrypt
+from private.encryption.encryption import encrypt, decrypt
 from .model import FileBlockUpload
 
 DEFAULT_CID_VERSION = 1
