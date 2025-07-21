@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from akavesdk import SDK
 from akavesdk import SDKError
-from sdk.config import DEFAULT_CONFIG
+from sdk.config import DEFAULT_CONFIG_TEST_STREAMING_CONN
 
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 
 def get_env_or_default(key: str) -> str:
-    return os.getenv(key, DEFAULT_CONFIG.get(key, ''))
+    return os.getenv(key, DEFAULT_CONFIG_TEST_STREAMING_CONN.get(key, ''))
 
 def validate_configuration():
     return True

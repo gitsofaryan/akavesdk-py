@@ -20,9 +20,19 @@ _KNOWN_ERROR_STRINGS: List[str] = [
 ]
 
 # Default config for the streaming connection test 
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG_TEST_STREAMING_CONN = {
     'AKAVE_SDK_NODE': 'connect.akave.ai:5000',  
     'ENCRYPTION_KEY': '',  
+}
+
+
+# Default configuration
+DEFAULT_CONFIG_TEST_SDK_CONN = {
+    'AKAVE_SDK_NODE': 'connect.akave.ai:5000',  # For streaming operations
+    'AKAVE_IPC_NODE': 'connect.akave.ai:5500',  # For IPC operations
+    'ETHEREUM_NODE_URL': 'https://n3-us.akave.ai/ext/bc/2JMWNmZbYvWcJRPPy1siaDBZaDGTDAaqXoY5UBKh4YrhNFzEce/rpc',
+    'STORAGE_CONTRACT_ADDRESS': '0x9Aa8ff1604280d66577ecB5051a3833a983Ca3aF',  # Will be obtained from node
+    'ACCESS_CONTRACT_ADDRESS': '',   # Will be obtained from node
 }
 
 # Default CID version and codecs for IPFS
