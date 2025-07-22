@@ -230,6 +230,106 @@ class TestStreamingAPI(unittest.TestCase):
         
         self.assertIn("DAG building failed", str(context.exception))
 
+    def test_download_v2_success(self):
+        """Test successful download_v2 operation."""
+        file_download = MagicMock()
+        file_download.chunks = [MagicMock(), MagicMock()]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download_v2', return_value=MagicMock()) as mock_create_chunk_download_v2, \
+             patch.object(self.streaming_api, '_download_chunk_blocks') as mock_download_chunk_blocks:
+            self.streaming_api.download_v2(ctx, file_download, writer)
+            self.assertEqual(mock_create_chunk_download_v2.call_count, 2)
+            self.assertEqual(mock_download_chunk_blocks.call_count, 2)
+
+    def test_download_v2_context_cancel(self):
+        """Test download_v2 stops on context cancellation."""
+        file_download = MagicMock()
+        chunk1 = MagicMock()
+        chunk2 = MagicMock()
+        file_download.chunks = [chunk1, chunk2]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.side_effect = [False, True]
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download_v2', return_value=MagicMock()) as mock_create_chunk_download_v2, \
+             patch.object(self.streaming_api, '_download_chunk_blocks') as mock_download_chunk_blocks:
+            self.streaming_api.download_v2(ctx, file_download, writer)
+            self.assertEqual(mock_create_chunk_download_v2.call_count, 1)
+            self.assertEqual(mock_download_chunk_blocks.call_count, 1)
+
+    def test_download_random_success(self):
+        """Test successful download_random operation with erasure coding enabled."""
+        self.streaming_api.erasure_code = MagicMock()
+        file_download = MagicMock()
+        file_download.chunks = [MagicMock(), MagicMock()]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download', return_value=MagicMock()) as mock_create_chunk_download, \
+             patch.object(self.streaming_api, '_download_random_chunk_blocks') as mock_download_random_chunk_blocks:
+            self.streaming_api.download_random(ctx, file_download, writer)
+            self.assertEqual(mock_create_chunk_download.call_count, 2)
+            self.assertEqual(mock_download_random_chunk_blocks.call_count, 2)
+
+    def test_download_random_erasure_coding_disabled(self):
+        """Test download_random raises error if erasure coding is not enabled."""
+        self.streaming_api.erasure_code = None
+        file_download = MagicMock()
+        file_download.chunks = [MagicMock()]
+        ctx = MagicMock()
+        writer = MagicMock()
+        with self.assertRaises(SDKError) as context:
+            self.streaming_api.download_random(ctx, file_download, writer)
+        self.assertIn('erasure coding is not enabled', str(context.exception))
+
+    def test_download_random_context_cancel(self):
+        """Test download_random stops on context cancellation."""
+        self.streaming_api.erasure_code = MagicMock()
+        file_download = MagicMock()
+        chunk1 = MagicMock()
+        chunk2 = MagicMock()
+        file_download.chunks = [chunk1, chunk2]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.side_effect = [False, True]
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download', return_value=MagicMock()) as mock_create_chunk_download, \
+             patch.object(self.streaming_api, '_download_random_chunk_blocks') as mock_download_random_chunk_blocks:
+            self.streaming_api.download_random(ctx, file_download, writer)
+            self.assertEqual(mock_create_chunk_download.call_count, 1)
+            self.assertEqual(mock_download_random_chunk_blocks.call_count, 1)
+
+    def test_download_v2_error_handling(self):
+        """Test download_v2 raises SDKError on exception."""
+        file_download = MagicMock()
+        file_download.chunks = [MagicMock()]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download_v2', side_effect=Exception('fail')):
+            with self.assertRaises(SDKError) as context:
+                self.streaming_api.download_v2(ctx, file_download, writer)
+            self.assertIn('failed to download file', str(context.exception))
+
+    def test_download_random_error_handling(self):
+        """Test download_random raises SDKError on exception."""
+        self.streaming_api.erasure_code = MagicMock()
+        file_download = MagicMock()
+        file_download.chunks = [MagicMock()]
+        file_download.stream_id = 'stream123'
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        with patch.object(self.streaming_api, '_create_chunk_download', side_effect=Exception('fail')):
+            with self.assertRaises(SDKError) as context:
+                self.streaming_api.download_random(ctx, file_download, writer)
+            self.assertIn('failed to download file', str(context.exception))
+
 
 if __name__ == '__main__':
     unittest.main() 

@@ -311,6 +311,105 @@ class TestIPCAPI(unittest.TestCase):
         """Placeholder test for IPC API."""
         self.assertTrue(True)
 
+    def test_create_file_download_success(self):
+        """Test successful file download creation."""
+        self.ipc_api.client = MagicMock()
+        bucket_name = "test-bucket"
+        file_name = "test-file.txt"
+        mock_response = MagicMock()
+        mock_response.bucket_name = bucket_name
+        mock_response.chunks = [MagicMock(cid='cid1', encoded_size=100, size=50)]
+        self.ipc_api.client.FileDownloadCreate.return_value = mock_response
+        result = self.ipc_api.create_file_download(None, bucket_name, file_name)
+        self.assertEqual(result.bucket_name, bucket_name)
+        self.assertEqual(result.chunks[0].cid, 'cid1')
+
+    def test_create_file_download_empty_params(self):
+        """Test file download creation with empty parameters."""
+        self.ipc_api.client = MagicMock()
+        with self.assertRaises(SDKError):
+            self.ipc_api.create_file_download(None, '', 'file.txt')
+        with self.assertRaises(SDKError):
+            self.ipc_api.create_file_download(None, 'bucket', '')
+
+    def test_create_file_download_error(self):
+        """Test file download creation with error."""
+        self.ipc_api.client = MagicMock()
+        self.ipc_api.client.FileDownloadCreate.side_effect = Exception('fail')
+        with self.assertRaises(SDKError):
+            self.ipc_api.create_file_download(None, 'bucket', 'file.txt')
+
+    def test_create_range_file_download_success(self):
+        """Test successful range file download creation."""
+        self.ipc_api.client = MagicMock()
+        bucket_name = "test-bucket"
+        file_name = "test-file.txt"
+        mock_response = MagicMock()
+        mock_response.bucket_name = bucket_name
+        mock_response.chunks = [MagicMock(cid='cid1', encoded_size=100, size=50)]
+        self.ipc_api.client.FileDownloadRangeCreate.return_value = mock_response
+        result = self.ipc_api.create_range_file_download(None, bucket_name, file_name, 0, 1)
+        self.assertEqual(result.bucket_name, bucket_name)
+        self.assertEqual(result.chunks[0].cid, 'cid1')
+
+    def test_create_range_file_download_error(self):
+        """Test range file download creation with error."""
+        self.ipc_api.client = MagicMock()
+        self.ipc_api.client.FileDownloadRangeCreate.side_effect = Exception('fail')
+        with self.assertRaises(SDKError):
+            self.ipc_api.create_range_file_download(None, 'bucket', 'file.txt', 0, 1)
+
+    @patch.object(IPC, 'create_chunk_download')
+    @patch.object(IPC, 'download_chunk_blocks')
+    def test_download_success(self, mock_download_chunk_blocks, mock_create_chunk_download):
+        """Test successful download operation."""
+        file_download = MagicMock()
+        file_download.bucket_name = 'bucket'
+        file_download.name = 'file.txt'
+        chunk1 = MagicMock()
+        chunk2 = MagicMock()
+        file_download.chunks = [chunk1, chunk2]
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        mock_create_chunk_download.return_value = MagicMock()
+        self.ipc_api.download(ctx, file_download, writer)
+        self.assertEqual(mock_create_chunk_download.call_count, 2)
+        self.assertEqual(mock_download_chunk_blocks.call_count, 2)
+
+    @patch.object(IPC, 'create_chunk_download')
+    @patch.object(IPC, 'download_chunk_blocks')
+    def test_download_context_cancel(self, mock_download_chunk_blocks, mock_create_chunk_download):
+        """Test download stops on context cancellation."""
+        file_download = MagicMock()
+        file_download.bucket_name = 'bucket'
+        file_download.name = 'file.txt'
+        chunk1 = MagicMock()
+        chunk2 = MagicMock()
+        file_download.chunks = [chunk1, chunk2]
+        ctx = MagicMock()
+        ctx.done.side_effect = [False, True]
+        writer = MagicMock()
+        mock_create_chunk_download.return_value = MagicMock()
+        with self.assertRaises(SDKError) as context:
+            self.ipc_api.download(ctx, file_download, writer)
+        self.assertIn('failed to download file: context cancelled', str(context.exception))
+
+    @patch.object(IPC, 'create_chunk_download')
+    @patch.object(IPC, 'download_chunk_blocks')
+    def test_download_error_handling(self, mock_download_chunk_blocks, mock_create_chunk_download):
+        """Test download raises SDKError on exception."""
+        file_download = MagicMock()
+        file_download.bucket_name = 'bucket'
+        file_download.name = 'file.txt'
+        file_download.chunks = [MagicMock()]
+        ctx = MagicMock()
+        ctx.done.return_value = False
+        writer = MagicMock()
+        mock_create_chunk_download.side_effect = Exception('fail')
+        with self.assertRaises(SDKError):
+            self.ipc_api.download(ctx, file_download, writer)
+
 
 if __name__ == '__main__':
     unittest.main() 

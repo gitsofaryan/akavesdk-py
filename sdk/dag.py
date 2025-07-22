@@ -1,6 +1,6 @@
 import io
 import hashlib
-from typing import List, Optional, Any, BinaryIO
+from typing import List, Optional, Any, BinaryIO, Tuple
 from dataclasses import dataclass
 
 try:
