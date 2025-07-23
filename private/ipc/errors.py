@@ -1,6 +1,6 @@
 import web3
 from typing import Dict, Optional
-from sdk.config import _KNOWN_ERROR_STRINGS, validate_hex_string
+from sdk.config import KNOWN_ERROR_STRINGS, validate_hex_string
 
 
 # Dictionary to store the mapping from error hash (selector) to error string
@@ -19,7 +19,7 @@ def parse_errors_to_hashes() -> None:
         return
 
     temp_map = {}
-    for error_string in _KNOWN_ERROR_STRINGS:
+    for error_string in KNOWN_ERROR_STRINGS:
         # Construct the error signature string
         error_signature = f"Error({error_string})"
         # Compute Keccak256 hash
@@ -49,7 +49,7 @@ def error_hash_to_error(error_data: str) -> Optional[str]:
         print("Warning: Error hashes not parsed yet. Parsing now.") # Optional: logging
         parse_errors_to_hashes()
         
-    if not isinstance(error_data, str) or validate_hex_string(error_data):
+    if not isinstance(error_data, str) or not validate_hex_string(error_data):
         return None 
 
     # Extract the selector (first 4 bytes after '0x')
