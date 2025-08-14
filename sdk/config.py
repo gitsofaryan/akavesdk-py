@@ -1,5 +1,6 @@
 from typing import Optional, List
 from private.memory.memory import Size
+from dataclasses import dataclass
 
 BLOCK_SIZE = 1 * Size.MB
 ENCRYPTION_OVERHEAD = 28  # 16 bytes for AES-GCM tag, 12 bytes for nonce

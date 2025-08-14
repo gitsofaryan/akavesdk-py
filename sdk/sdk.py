@@ -87,10 +87,10 @@ class SDK:
         self._contract_info = None
 
         if self.block_part_size <= 0 or self.block_part_size > BLOCK_SIZE:
-            raise SDKError(f"Invalid blockPartSize: {block_part_size}. Valid range is 1-{BLOCK_SIZE}")
+            raise SDKError(f"Invalid blockPartSize: {config.block_part_size}. Valid range is 1-{BLOCK_SIZE}")
 
         # Create gRPC channel and clients for SDK operations
-        self.conn = grpc.insecure_channel(address)
+        self.conn = grpc.insecure_channel(config.address)
         self.client = nodeapi_pb2_grpc.NodeAPIStub(self.conn)
         
         # Create separate gRPC channel for IPC operations if needed
