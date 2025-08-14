@@ -10,7 +10,7 @@ from multiformats.cid import CID
 from .sdk_ipc import IPC
 from .sdk_streaming import StreamingAPI
 from .erasure_code import ErasureCode
-from .config import Config, SDKError, BLOCK_SIZE, MIN_BUCKET_NAME_LENGTH
+from .config import Config, SDKConfig, SDKError, BLOCK_SIZE, MIN_BUCKET_NAME_LENGTH
 import os
 import time
 
@@ -67,24 +67,22 @@ class AkaveContractFetcher:
             self.channel.close()
 
 class SDK:
-    def __init__(self, address: str, max_concurrency: int, block_part_size: int, use_connection_pool: bool,
-                 encryption_key: Optional[bytes] = None, private_key: Optional[str] = None,
-                 streaming_max_blocks_in_chunk: int = 32, parity_blocks_count: int = 0,
-                 ipc_address: Optional[str] = None):
+    def __init__(self, config: SDKConfig):
         self.client = None
         self.conn = None
         self.ipc_conn = None
         self.ipc_client = None
         self.sp_client = None
         self.streaming_erasure_code = None
-        self.max_concurrency = max_concurrency
-        self.block_part_size = block_part_size
-        self.use_connection_pool = use_connection_pool
-        self.private_key = private_key
-        self.encryption_key = encryption_key or []
-        self.streaming_max_blocks_in_chunk = streaming_max_blocks_in_chunk
-        self.parity_blocks_count = parity_blocks_count
-        self.ipc_address = ipc_address or address  # Use provided IPC address or fallback to main address
+
+        self.max_concurrency = config.max_concurrency
+        self.block_part_size = config.block_part_size
+        self.use_connection_pool = config.use_connection_pool
+        self.private_key = config.private_key
+        self.encryption_key = config.encryption_key or []
+        self.streaming_max_blocks_in_chunk = config.streaming_max_blocks_in_chunk
+        self.parity_blocks_count = config.parity_blocks_count
+        self.ipc_address = config.ipc_address or config.address  # Use provided IPC address or fallback to main address
         
         self._contract_info = None
 
@@ -96,7 +94,7 @@ class SDK:
         self.client = nodeapi_pb2_grpc.NodeAPIStub(self.conn)
         
         # Create separate gRPC channel for IPC operations if needed
-        if self.ipc_address == address:
+        if self.ipc_address == config.address:
             # Reuse main connection for IPC
             self.ipc_conn = self.conn
         else:

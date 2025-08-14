@@ -85,3 +85,16 @@ KNOWN_ERROR_STRINGS: List[str] = [
     "AccessManager: caller is not authorized",
     # Add all other known error strings here...
 ]
+
+@dataclass
+class SDKConfig:
+    address: str
+    ipc_address: Optional[str] = None
+    max_concurrency: int
+    block_part_size: int
+    use_connection_pool: bool
+    encryption_key: Optional[bytes] = None
+    private_key: Optional[str] = None
+    streaming_max_blocks_in_chunk: int = 32
+    parity_blocks_count: int = 0
+    connection_timeout: Optional[int] = 10
