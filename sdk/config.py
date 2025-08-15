@@ -99,3 +99,5 @@ class SDKConfig:
     streaming_max_blocks_in_chunk: int = 32
     parity_blocks_count: int = 0
     connection_timeout: Optional[int] = 10
+    max_retries: Optional[int] = 3
+    backoff_delay: Optional[int] = 1

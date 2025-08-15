@@ -78,6 +78,8 @@ class SDK:
         self.parity_blocks_count = config.parity_blocks_count
         self.ipc_address = config.ipc_address or config.address  # Use provided IPC address or fallback to main address
         self.connection_timeout = config.connection_timeout
+        self.max_retries = config.max_retries
+        self.backoff_delay = config.backoff_delay
         
 
         self._contract_info = None

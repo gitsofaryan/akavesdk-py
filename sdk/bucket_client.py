@@ -7,6 +7,7 @@ from typing import Callable, TypeVar
 from .config import SDKError, MIN_BUCKET_NAME_LENGTH
 from . import nodeapi_pb2_grpc, nodeapi_pb2
 from private.encryption import derive_key
+from .shared.grpc_base import GrpcClientBase
 
 T = TypeVar("T")  # Generic return type for gRPC calls
 
@@ -22,10 +23,10 @@ class Bucket:
     created_at: datetime
 
 
-class BucketClient:
+class BucketClient(GrpcClientBase):
     def __init__(self, channel: grpc.Channel, connection_timeout: int):
+        super().__init__(connection_timeout=connection_timeout)
         self.client = nodeapi_pb2_grpc.NodeAPIStub(channel)
-        self.connection_timeout = connection_timeout
 
     def bucket_create(self, name: str) -> BucketCreateResult:
         self._validate_bucket_name(name, "BucketCreate")
@@ -65,23 +66,6 @@ class BucketClient:
         except grpc.RpcError as e:
             self._handle_grpc_error(method_name, e)
             raise  # for making type checkers happy
-
-    def _handle_grpc_error(self, method_name: str, error: grpc.RpcError) -> None:
-        status_code = error.code()
-        details = error.details() or "No details provided"
-
-        if status_code == grpc.StatusCode.DEADLINE_EXCEEDED:
-            # Deadline exceeded → request took longer than connection_timeout
-            logging.warning(f"{method_name} timed out after {self.connection_timeout}s")
-            raise SDKError(f"{method_name} request timed out after {self.connection_timeout}s") from error
-
-        logging.error(
-            f"gRPC call {method_name} failed: {status_code.name} ({status_code.value}) - {details}"
-        )
-        raise SDKError(
-            f"gRPC call {method_name} failed: {status_code.name} ({status_code.value}) - {details}"
-        ) from error
-
 
 def encryption_key_derivation(parent_key: bytes, *info_data: str) -> bytes:
     if not parent_key:
