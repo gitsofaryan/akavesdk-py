@@ -141,7 +141,13 @@ try:
     
     # Step 4: Upload a file (minimum file size is 127 bytes, max recommended test size: 100MB)
     # Note: upload() handles file creation and all transactions automatically
-    file_name = "my-file.txt"
+    file_name = f"test-file-{int(time.time())}.txt"
+    
+    # Create test file
+    with open(file_name, "w") as f:
+        f.write("Hello from Akave SDK! This is a test file. " * 5)
+    print(f"Created test file: {file_name}")
+    
     with open(file_name, "rb") as f:
         file_meta = ipc.upload(None, bucket_name, file_name, f)
         print(f"✅ Uploaded file: {file_meta.name}")
