@@ -393,7 +393,7 @@ def _decode_varint(data: bytes) -> tuple[int, int]:
 def extract_block_data(cid_str: str, data: bytes) -> bytes:
     try:
         if not IPLD_AVAILABLE:
-            return data
+            return _extract_unixfs_data_fallback(data)
             
         try:
             cid_obj = CID.decode(cid_str)
@@ -408,16 +408,66 @@ def extract_block_data(cid_str: str, data: bytes) -> bytes:
             try:
                 pb_node = decode(data)
                 if pb_node.data:
-                    return _extract_unixfs_data(pb_node.data)
+                    extracted = _extract_unixfs_data(pb_node.data)
+                    if extracted:
+                        return extracted
+                    return _extract_unixfs_data_fallback(data)
                 else:
                     return b""
             except Exception:
-                return data
+                return _extract_unixfs_data_fallback(data)
         elif cid_type == RAW_CODEC:
             return data
         else:
             raise DAGError(f"unknown CID type: {cid_type}")
             
+    except Exception:
+        return _extract_unixfs_data_fallback(data)
+
+def _extract_unixfs_data_fallback(data: bytes) -> bytes:
+    try:
+        offset = 0  
+        # DAG-PB structure:
+        # Field 1 (Data): The UnixFS data
+        # Field 2 (Links): Array of links to other blocks
+        
+        while offset < len(data):
+            if offset >= len(data):
+                break
+                
+            field_tag = data[offset]
+            offset += 1
+            
+            field_number = (field_tag >> 3)
+            wire_type = field_tag & 0x07
+            
+            if field_number == 1 and wire_type == 2:
+                length, bytes_read = _decode_varint(data[offset:])
+                offset += bytes_read
+                
+                if offset + length <= len(data):
+                    unixfs_data = data[offset:offset + length]
+                    extracted = _extract_unixfs_data(unixfs_data)
+                    if extracted:
+                        return extracted
+                    offset += length
+                else:
+                    break
+            elif wire_type == 2:  
+                length, bytes_read = _decode_varint(data[offset:])
+                offset += bytes_read + length
+            elif wire_type == 0:  
+                value, bytes_read = _decode_varint(data[offset:])
+                offset += bytes_read
+            elif wire_type == 1:  
+                offset += 8
+            elif wire_type == 5:  
+                offset += 4
+            else:
+                offset += 1
+        
+        return data
+        
     except Exception:
         return data
 
