@@ -659,3 +659,314 @@ class TestFilePublicAccess:
         self.mock_ipc.access_manager.change_public_access.assert_called_once_with(
             self.mock_ipc.auth, "file_id", True
         )
+
+
+class TestDownload:
+    
+    def setup_method(self):
+        self.mock_client = Mock()
+        self.mock_conn = Mock()
+        self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
+        
+        self.config = SDKConfig(address="test:5500")
+        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
+
+    @patch('sdk.sdk_ipc.ipcnodeapi_pb2')
+    def test_create_chunk_download_success(self, mock_pb2):
+        chunk = Mock()
+        chunk.cid = "chunk_cid"
+        chunk.index = 0
+        chunk.size = 100
+        chunk.encoded_size = 120
+
+        mock_response = Mock()
+        mock_block = Mock()
+        mock_block.cid = "block_cid"
+        mock_block.node_id = "node_id"
+        mock_block.node_address = "node_addr"
+        mock_block.permit = "permit"
+        mock_response.blocks = [mock_block]
+
+        self.mock_client.FileDownloadChunkCreate.return_value = mock_response
+
+        result = self.ipc.create_chunk_download(None, "bucket", "file", chunk)
+
+        self.mock_client.FileDownloadChunkCreate.assert_called_once()
+        assert result.cid == "chunk_cid"
+        assert len(result.blocks) == 1
+        assert result.blocks[0].cid == "block_cid"
+
+    @patch('sdk.sdk_ipc.extract_block_data')
+    @patch('sdk.sdk_ipc.ConnectionPool')
+    def test_download_chunk_blocks_success(self, mock_pool_cls, mock_extract):
+        mock_pool = Mock()
+        mock_pool_cls.return_value = mock_pool
+        
+        # Mock client creation
+        mock_client = Mock()
+        mock_pool.create_ipc_client.return_value = (mock_client, Mock(), None)
+        
+        # Mock stream response
+        mock_stream_item = Mock()
+        mock_stream_item.data = b"block_data"
+        mock_client.FileDownloadBlock.return_value = [mock_stream_item]
+
+        # Mock chunk download object
+        chunk_download = Mock()
+        chunk_download.cid = "chunk_cid"
+        chunk_download.index = 0
+        chunk_download.size = 10
+        
+        block = Mock()
+        block.cid = "block_cid"
+        block.akave.node_address = "addr"
+        chunk_download.blocks = [block]
+
+        writer = io.BytesIO()
+        mock_extract.return_value = b"block_data"
+
+        self.ipc.download_chunk_blocks(None, "bucket", "file", "addr", chunk_download, None, writer)
+
+        assert writer.getvalue() == b"block_data"
+
+    def test_download_success(self):
+        # Mock create_file_download
+        chunk = Mock()
+        chunk.cid = "chunk_cid"
+        
+        file_download = Mock()
+        file_download.bucket_name = "bucket"
+        file_download.name = "file"
+        file_download.chunks = [chunk]
+
+        writer = io.BytesIO()
+
+        # Mock internal methods
+        self.ipc.create_chunk_download = Mock()
+        
+        # Mock download_chunk_blocks to write to writer
+        def side_effect(*args):
+            args[-1].write(b"content")
+            return None
+        self.ipc.download_chunk_blocks = Mock(side_effect=side_effect)
+
+        self.ipc.download(None, file_download, writer)
+
+        assert writer.getvalue() == b"content"
+        self.ipc.create_chunk_download.assert_called_once()
+        self.ipc.download_chunk_blocks.assert_called_once()
+
+    @patch('sdk.sdk_ipc.ipcnodeapi_pb2')
+    def test_create_range_file_download(self, mock_pb2):
+        mock_response = Mock()
+        mock_response.bucket_name = "bucket"
+        mock_response.chunks = []
+        
+        self.mock_client.FileDownloadRangeCreate.return_value = mock_response
+
+        result = self.ipc.create_range_file_download(None, "bucket", "file", 0, 10)
+        
+        self.mock_client.FileDownloadRangeCreate.assert_called_once()
+        assert result.bucket_name == "bucket"
+
+
+class TestUploadLogic:
+
+    def setup_method(self):
+        self.mock_client = Mock()
+        self.mock_conn = Mock()
+        self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
+        self.mock_ipc.auth.key = b"key"
+        self.mock_ipc.storage = Mock()
+        self.mock_ipc.eth = Mock()
+        self.mock_ipc.eth.eth = Mock()
+        
+        self.config = SDKConfig(address="test:5500", max_concurrency=1)
+        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
+
+    @patch('sdk.sdk_ipc.to_ipc_proto_chunk')
+    @patch('sdk.sdk_ipc.ConnectionPool')
+    def test_upload_chunk_success(self, mock_pool_cls, mock_to_proto):
+        mock_pool = Mock()
+        mock_pool_cls.return_value = mock_pool
+        mock_pool.close.return_value = None
+        
+        mock_client = Mock()
+        mock_closer = Mock()
+        mock_pool.create_ipc_client.return_value = (mock_client, mock_closer, None)
+
+        # Mock proto chunk
+        mock_proto = Mock()
+        mock_proto.cid = "chunk_cid"
+        mock_proto.index = 0
+        mock_to_proto.return_value = ([], [], mock_proto, None)
+
+        chunk_upload = Mock()
+        chunk_upload.chunk_cid = "chunk_cid"
+        chunk_upload.bucket_id = b"bucket_id_32bytes_1234567890ab"
+        chunk_upload.file_name = "file"
+        chunk_upload.actual_size = 100
+        chunk_upload.index = 0
+        
+        # Mock blocks with proper data attribute
+        block_mock = Mock()
+        block_mock.cid = "block_cid"
+        block_mock.data = b"test_data"
+        block_mock.node_address = "addr"
+        block_mock.node_id = "node_id"
+        chunk_upload.blocks = [block_mock]
+        
+        # Mock the signature creation to avoid complex EIP712 logic
+        with patch.object(self.ipc, '_create_storage_signature', return_value=("0xsig", b"nonce")):
+            self.ipc.upload_chunk(None, chunk_upload)
+        
+        mock_pool.create_ipc_client.assert_called()
+        mock_client.FileUploadBlock.assert_called()
+
+    @patch('sdk.sdk_ipc.derive_key')
+    @patch('sdk.sdk_ipc.encrypt')
+    def test_upload_with_encryption(self, mock_encrypt, mock_derive):
+        # Setup for upload
+        self.ipc.encryption_key = b"root_key"
+        mock_derive.return_value = b"derived_key"
+        mock_encrypt.return_value = b"encrypted"
+
+        # Mock dependent methods to bypass full flow
+        self.ipc.create_file_upload = Mock()
+        file_upload = Mock()
+        file_upload.name = "file"
+        file_upload.bucket_name = "bucket"
+        file_upload.state = Mock()
+        file_upload.state.chunk_count = 0
+        file_upload.state.actual_file_size = 0
+        self.ipc.create_file_upload.return_value = file_upload
+        
+        self.ipc.ipc.storage.get_bucket_by_name.return_value = [b"bucket_id"]
+        
+        with patch.object(self.ipc, '_upload_with_comprehensive_debug') as mock_inner:
+            reader = io.BytesIO(b"data")
+            self.ipc.upload(None, "bucket", "file", reader)
+            
+            mock_derive.assert_called()
+            mock_inner.assert_called()
+            args, _ = mock_inner.call_args
+            assert args[6] == b"derived_key"
+
+
+class TestErasureCoding:
+
+    def setup_method(self):
+        self.mock_client = Mock()
+        self.mock_conn = Mock()
+        self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
+        self.mock_ipc.auth.key = b"key"
+        self.mock_ipc.storage = Mock()
+        
+        self.config = SDKConfig(address="test:5500")
+        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
+
+    @patch('sdk.sdk_ipc.extract_block_data')
+    @patch('sdk.sdk_ipc.ConnectionPool')
+    def test_download_with_erasure_coding(self, mock_pool_cls, mock_extract):
+        from sdk.erasure_code import ErasureCode
+        self.ipc.erasure_code = ErasureCode(data_blocks=4, parity_blocks=2)
+        
+        chunk_download = Mock()
+        chunk_download.cid = "chunk_cid"
+        chunk_download.index = 0
+        chunk_download.size = 100
+        chunk_download.blocks = [Mock(cid="b1", akave=Mock(node_address="addr"))]
+        
+        mock_pool = Mock()
+        mock_pool_cls.return_value = mock_pool
+        mock_client = Mock()
+        mock_stream = [Mock(data=b"block_data")]
+        mock_client.FileDownloadBlock.return_value = mock_stream
+        mock_pool.create_ipc_client.return_value = (mock_client, Mock(), None)
+        
+        mock_extract.return_value = b"block_data"
+        
+        writer = io.BytesIO()
+        
+        with patch.object(self.ipc.erasure_code, 'extract_data_blocks', return_value=b"decoded_data"):
+            self.ipc.download_chunk_blocks(None, "bucket", "file", "addr", chunk_download, None, writer)
+            
+            self.ipc.erasure_code.extract_data_blocks.assert_called_once()
+            assert writer.getvalue() == b"decoded_data"
+
+
+class TestErrorScenarios:
+
+    def setup_method(self):
+        self.mock_client = Mock()
+        self.mock_conn = Mock()
+        self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
+        self.mock_ipc.auth.key = "key"
+        self.mock_ipc.storage = Mock()
+        self.mock_ipc.eth = Mock()
+        self.mock_ipc.eth.eth = Mock()
+        
+        self.config = SDKConfig(address="test:5500")
+        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
+
+    def test_view_bucket_grpc_not_found(self):
+        import grpc
+        error = grpc.RpcError()
+        error.code = Mock(return_value=grpc.StatusCode.NOT_FOUND)
+        error.details = Mock(return_value="not found")
+        self.mock_client.BucketView.side_effect = error
+        
+        result = self.ipc.view_bucket(None, "nonexistent")
+        assert result is None
+
+    def test_create_bucket_transaction_reverted(self):
+        mock_receipt = Mock()
+        mock_receipt.status = 0
+        self.mock_ipc.storage.create_bucket.return_value = "0xtx"
+        self.mock_ipc.eth.eth.wait_for_transaction_receipt.return_value = mock_receipt
+        
+        with pytest.raises(SDKError, match="transaction failed"):
+            self.ipc.create_bucket(None, "test-bucket")
+
+    def test_file_info_grpc_unavailable(self):
+        import grpc
+        error = grpc.RpcError()
+        error.code = Mock(return_value=grpc.StatusCode.UNAVAILABLE)
+        error.details = Mock(return_value="service unavailable")
+        self.mock_client.FileView.side_effect = error
+        
+        with pytest.raises(SDKError, match="failed to get file info"):
+            self.ipc.file_info(None, "bucket", "file")
+
+    def test_delete_bucket_not_found(self):
+        import grpc
+        error = grpc.RpcError()
+        error.code = Mock(return_value=grpc.StatusCode.NOT_FOUND)
+        error.details = Mock(return_value="bucket not found")
+        self.mock_client.BucketView.side_effect = error
+        
+        with pytest.raises(SDKError, match="not found"):
+            self.ipc.delete_bucket(None, "nonexistent")
+
+    def test_upload_file_already_exists(self):
+        mock_bucket = Mock()
+        mock_bucket.id = "0x1234"
+        mock_bucket.created_at = Mock()
+        mock_bucket.created_at.seconds = 123
+        self.mock_client.BucketView.return_value = mock_bucket
+        
+        self.mock_ipc.storage.create_file.side_effect = Exception("0x6891dde0 FileAlreadyExists")
+        
+        with pytest.raises(SDKError, match="file already exists"):
+            self.ipc.create_file_upload(None, "bucket", "existing_file.txt")
+
+        with pytest.raises(SDKError, match="empty file name"):
+            self.ipc.create_file_download(None, "bucket", "")
