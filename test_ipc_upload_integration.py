@@ -9,12 +9,7 @@ from akavesdk import SDK, SDKConfig
 
 def main():
     NODE_ADDRESS = "connect.akave.ai:5500"
-    PRIVATE_KEY = os.getenv("AKAVE_PRIVATE_KEY", "")
-    if not PRIVATE_KEY:
-        print("❌ Error: AKAVE_PRIVATE_KEY environment variable not set")
-        print("   Please set it via: export AKAVE_PRIVATE_KEY='your_key_here'")
-        # For testing purposes only - to avoid committing actual key
-        return 1
+    PRIVATE_KEY = "a5c223e956644f1ba11f0dcc6f3df4992184ff3c919223744d0cf1db33dab4d6"
     BUCKET_NAME = "finalfr"
     
     script_dir = Path(__file__).parent
