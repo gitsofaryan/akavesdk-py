@@ -81,8 +81,10 @@ class TestMaybeEncryptMetadata:
 
 class TestToIPCProtoChunk:
     
+    @patch('sdk.sdk_ipc.CID')
     @patch('sdk.sdk_ipc.ipcnodeapi_pb2')
-    def test_to_ipc_proto_chunk_basic(self, mock_pb2):
+    def test_to_ipc_proto_chunk_basic(self, mock_pb2, mock_cid):
+        mock_cid.decode.return_value = b"bytes"
         mock_block_class = Mock()
         mock_pb2.IPCChunk.Block = mock_block_class
         mock_pb2.IPCChunk = Mock()
@@ -115,8 +117,10 @@ class TestIPCInit:
         mock_ipc_instance = Mock()
         config = SDKConfig(
             address="test:5500",
+
             max_concurrency=5,
             block_part_size=128*1024,
+            use_connection_pool=True,
             streaming_max_blocks_in_chunk=10
         )
         
@@ -282,8 +286,8 @@ class TestFileInfo:
     def test_file_info_success(self, mock_pb2):
         mock_response = Mock()
         mock_response.root_cid = "root_cid"
-        mock_response.name = "file.txt"
-        mock_response.size = 1024
+        mock_response.file_name = "file.txt"
+        mock_response.actual_size = 1024
         mock_response.encoded_size = 2048
         mock_response.created_at = Mock()
         mock_response.created_at.seconds = 1234567890
@@ -294,7 +298,7 @@ class TestFileInfo:
         
         assert isinstance(result, IPCFileMeta)
         assert result.name == "file.txt"
-        assert result.size == 1024
+        assert result.actual_size == 1024
 
 
 class TestListFiles:
@@ -324,7 +328,7 @@ class TestListFiles:
         mock_file.created_at.seconds = 100
         
         mock_response = Mock()
-        mock_response.files = [mock_file]
+        mock_response.list = [mock_file]
         
         self.mock_client.FileList.return_value = mock_response
         
@@ -372,6 +376,8 @@ class TestCreateFileUpload:
         self.mock_client = Mock()
         self.mock_conn = Mock()
         self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
         self.config = SDKConfig(address="test:5500")
         self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
     
@@ -386,12 +392,31 @@ class TestCreateFileUpload:
     @patch('sdk.sdk_ipc.new_ipc_file_upload')
     def test_create_file_upload_success(self, mock_new_upload):
         mock_upload = Mock()
+        mock_upload.state.encoded_file_size = 1000
+        mock_upload.state.actual_file_size = 500
         mock_new_upload.return_value = mock_upload
+        
+        # Mock view_bucket response
+        mock_bucket_response = Mock()
+        mock_bucket_response.id = "0x1234"
+        mock_bucket_response.name = "bucket"
+        mock_bucket_response.created_at = Mock()
+        mock_bucket_response.created_at.seconds = 123
+        self.mock_client.BucketView.return_value = mock_bucket_response
+        
+        # Mock storage create_file
+        self.mock_ipc.storage.create_file.return_value = "0xtx"
+        
+        # Mock wait for tx
+        mock_receipt = Mock()
+        mock_receipt.status = 1
+        self.mock_ipc.eth.eth.wait_for_transaction_receipt.return_value = mock_receipt
         
         result = self.ipc.create_file_upload(None, "bucket", "file.txt")
         
         assert result == mock_upload
         mock_new_upload.assert_called_once_with("bucket", "file.txt")
+        self.mock_ipc.storage.create_file.assert_called_once()
 
 
 class TestFileDelete:
@@ -411,16 +436,22 @@ class TestFileDelete:
         self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
     
     def test_file_delete_empty_bucket(self):
-        with pytest.raises(SDKError, match="empty bucket name"):
+        with pytest.raises(SDKError, match="empty bucket or file name"):
             self.ipc.file_delete(None, "", "file.txt")
     
     def test_file_delete_empty_filename(self):
-        with pytest.raises(SDKError, match="empty file name"):
+        with pytest.raises(SDKError, match="empty bucket or file name"):
             self.ipc.file_delete(None, "bucket", "")
     
     def test_file_delete_success(self):
         mock_receipt = Mock()
         mock_receipt.status = 1
+        
+        # Mock bucket lookup
+        self.mock_ipc.storage.get_bucket_by_name.return_value = (b"bucket_id_bytes", "bucket_name")
+        
+        # Mock file lookup
+        self.mock_ipc.storage.get_file_by_name.return_value = (b"file_id_bytes",)
         
         self.mock_ipc.storage.delete_file.return_value = "0xtx"
         self.mock_ipc.eth.eth.wait_for_transaction_receipt.return_value = mock_receipt
@@ -436,6 +467,8 @@ class TestCreateFileDownload:
         self.mock_client = Mock()
         self.mock_conn = Mock()
         self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x123"
         self.config = SDKConfig(address="test:5500")
         self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
     
@@ -468,25 +501,6 @@ class TestCreateFileDownload:
         assert result.name == "file.txt"
 
 
-class TestHelperMethods:
-    
-    def setup_method(self):
-        self.mock_client = Mock()
-        self.mock_conn = Mock()
-        self.mock_ipc = Mock()
-        self.config = SDKConfig(address="test:5500")
-        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
-    
-    def test_validate_bucket_name_valid(self):
-        self.ipc._validate_bucket_name("valid-bucket")
-    
-    def test_validate_bucket_name_empty(self):
-        with pytest.raises(SDKError, match="empty bucket name"):
-            self.ipc._validate_bucket_name("")
-    
-    def test_validate_bucket_name_too_short(self):
-        with pytest.raises(SDKError, match="invalid bucket name"):
-            self.ipc._validate_bucket_name("ab")
 
 
 @pytest.mark.integration
@@ -499,7 +513,12 @@ class TestIPCIntegration:
         mock_ipc.auth = Mock()
         mock_ipc.auth.address = "0x123"
         
-        config = SDKConfig(address="test:5500")
+        config = SDKConfig(
+            address="test:5500",
+            max_concurrency=10,
+            block_part_size=1024,
+            use_connection_pool=False
+        )
         
         ipc = IPC(mock_client, mock_conn, mock_ipc, config)
         
@@ -518,7 +537,12 @@ class TestIPCIntegration:
         mock_ipc.eth = Mock()
         mock_ipc.eth.eth = Mock()
         
-        config = SDKConfig(address="test:5500")
+        config = SDKConfig(
+            address="test:5500",
+            max_concurrency=10,
+            block_part_size=1024,
+            use_connection_pool=False
+        )
         ipc = IPC(mock_client, mock_conn, mock_ipc, config)
         
         mock_receipt = Mock()
@@ -550,3 +574,88 @@ class TestIPCIntegration:
         
         assert bucket.name == "test-bucket"
 
+
+class TestFilePublicAccess:
+    
+    def setup_method(self):
+        self.mock_client = Mock()
+        self.mock_conn = Mock()
+        self.mock_ipc = Mock()
+        self.mock_ipc.auth = Mock()
+        self.mock_ipc.auth.address = "0x1234" # Even length address
+        self.mock_ipc.storage = Mock()
+        self.mock_ipc.access_manager = Mock()
+        self.mock_ipc.eth = Mock()
+        self.mock_ipc.eth.eth = Mock()
+        
+        self.config = SDKConfig(address="test:5500")
+        self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
+    
+    def test_set_public_access_empty_bucket(self):
+        with pytest.raises(SDKError, match="empty bucket name"):
+            self.ipc.file_set_public_access(None, "", "file.txt", True)
+            
+    def test_set_public_access_empty_file(self):
+        with pytest.raises(SDKError, match="empty file name"):
+            self.ipc.file_set_public_access(None, "bucket", "", True)
+            
+    def test_set_public_access_bucket_not_found(self):
+        # view_bucket returns None
+        self.mock_client.BucketView.return_value = None
+        
+        with pytest.raises(SDKError, match="bucket 'bucket' not found"):
+            self.ipc.file_set_public_access(None, "bucket", "file.txt", True)
+            
+    def test_set_public_access_file_not_found(self):
+        # Bucket exists
+        mock_bucket_response = Mock()
+        mock_bucket_response.id = "0x1234" # Even length
+        mock_bucket_response.created_at = Mock()
+        mock_bucket_response.created_at.seconds = 123
+        self.mock_client.BucketView.return_value = mock_bucket_response
+        
+        # File not found in storage contract
+        self.mock_ipc.storage.get_file_by_name.side_effect = Exception("file not found")
+        
+        with pytest.raises(SDKError, match="failed to get file"):
+            self.ipc.file_set_public_access(None, "bucket", "file.txt", True)
+
+    def test_set_public_access_no_manager(self):
+        # Remove access manager
+        self.ipc.ipc.access_manager = None
+        
+        # Bucket exists
+        mock_bucket_response = Mock()
+        mock_bucket_response.id = "0x1234" # Even length
+        mock_bucket_response.created_at = Mock()
+        mock_bucket_response.created_at.seconds = 123
+        self.mock_client.BucketView.return_value = mock_bucket_response
+        
+        # File exists
+        self.mock_ipc.storage.get_file_by_name.return_value = ["file_id"]
+        
+        with pytest.raises(SDKError, match="access manager not available"):
+            self.ipc.file_set_public_access(None, "bucket", "file.txt", True)
+            
+    def test_set_public_access_success(self):
+        # Bucket exists
+        mock_bucket_response = Mock()
+        mock_bucket_response.id = "0x1234" # Even length
+        mock_bucket_response.created_at = Mock()
+        mock_bucket_response.created_at.seconds = 123
+        self.mock_client.BucketView.return_value = mock_bucket_response
+        
+        # File exists in storage contract
+        self.mock_ipc.storage.get_file_by_name.return_value = ["file_id"]
+        
+        # Transaction succeeds
+        self.mock_ipc.access_manager.change_public_access.return_value = "0xtx"
+        mock_receipt = Mock()
+        mock_receipt.status = 1
+        self.mock_ipc.eth.eth.wait_for_transaction_receipt.return_value = mock_receipt
+        
+        self.ipc.file_set_public_access(None, "bucket", "file.txt", True)
+        
+        self.mock_ipc.access_manager.change_public_access.assert_called_once_with(
+            self.mock_ipc.auth, "file_id", True
+        )
